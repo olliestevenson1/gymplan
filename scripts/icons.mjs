@@ -1,14 +1,18 @@
-// Draws the app icon (gold dumbbell on Saints navy) and writes the PNG sizes iOS and the manifest need.
+// Draws the app icon (an original navy and gold shield with a dumbbell) and writes the PNG sizes iOS and the manifest need.
 import sharp from "sharp";
 import { mkdirSync } from "node:fs";
 
 const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
   <rect width="1024" height="1024" fill="#12284C"/>
-  <rect x="248" y="232" width="84" height="560" rx="14" fill="#E8B321"/>
-  <rect x="692" y="232" width="84" height="560" rx="14" fill="#E8B321"/>
-  <rect x="160" y="352" width="56" height="320" rx="12" fill="#E8B321"/>
-  <rect x="808" y="352" width="56" height="320" rx="12" fill="#E8B321"/>
-  <rect x="332" y="472" width="360" height="80" fill="#FFFFFF"/>
+  <path d="M512 150 L800 240 V500 C800 690 680 810 512 880 C344 810 224 690 224 500 V240 Z"
+        fill="#12284C" stroke="#E8B321" stroke-width="44" stroke-linejoin="round"/>
+  <g fill="#E8B321">
+    <rect x="352" y="390" width="54" height="240" rx="12"/>
+    <rect x="618" y="390" width="54" height="240" rx="12"/>
+    <rect x="300" y="450" width="40" height="120" rx="10"/>
+    <rect x="684" y="450" width="40" height="120" rx="10"/>
+  </g>
+  <rect x="406" y="488" width="212" height="44" fill="#FFFFFF"/>
 </svg>`;
 
 mkdirSync("public", { recursive: true });
