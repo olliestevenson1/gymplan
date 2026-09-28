@@ -1,0 +1,447 @@
+import "@fontsource/big-shoulders-display/700";
+import "@fontsource/big-shoulders-display/800";
+import "@fontsource/figtree/400";
+import "@fontsource/figtree/500";
+import "@fontsource/figtree/600";
+import "@fontsource/figtree/700";
+import "./style.css";
+import { PLAN, WEEK, LIFT_NAMES, findExercise, type Exercise, type Session } from "./plan";
+import { loadAll, put, remove, replaceAll, askPersist, type DayLog, type SetLog } from "./store";
+
+/* ---------------- state ---------------- */
+let days: Record<string, DayLog> = {};
+let view: "train" | "progress" | "backup" = "train";
+let pickedSession: number | null = null;
+let confirmClear = false;
+let pendingRender = false;
+
+const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
+const pad = (n: number) => String(n).padStart(2, "0");
+const keyOf = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+const todayKey = () => keyOf(new Date());
+const dowMon = (d: Date) => (d.getDay() + 6) % 7;
+const esc = (s: unknown) => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]!));
+const kg = (v: number) => String(Math.round(v * 10) / 10);
+const restTxt = (s: number) => (s >= 60 ? (s % 60 ? `${Math.floor(s / 60)}:${pad(s % 60)}` : `${s / 60} min`) : `${s}s`);
+const repsTxt = (e: Exercise) => e.repsTxt ?? (e.fail ? "to failure" : e.lo === e.hi ? `${e.lo} reps` : `${e.lo} to ${e.hi} reps`);
+const unit = (e: Exercise) => (e.kind === "bw" ? "+kg" : e.kind === "db" ? "kg ea" : "kg");
+
+const sortedDates = () => Object.keys(days).sort().reverse();
+const setsDone = (d?: DayLog) => (d ? Object.values(d.ex).reduce((n, a) => n + a.filter(s => s.done).length, 0) : 0);
+const plan = (n: number): Session => PLAN[n - 1];
+
+function nextSession(): number {
+  const tk = todayKey();
+  for (const d of sortedDates()) {
+    if (d === tk) continue;
+    if (setsDone(days[d]) > 0) return (days[d].session % 4) + 1;
+  }
+  return 1;
+}
+function activeSession(): number {
+  const t = days[todayKey()];
+  return t ? t.session : pickedSession ?? nextSession();
+}
+function today(): DayLog {
+  const tk = todayKey();
+  if (!days[tk]) days[tk] = { date: tk, session: activeSession(), ex: {}, extra: { done: false, note: "" }, updated: Date.now() };
+  return days[tk];
+}
+function setRow(d: DayLog, e: Exercise, i: number): SetLog {
+  const arr = d.ex[e.id] || (d.ex[e.id] = []);
+  while (arr.length <= i) arr.push({ kg: null, reps: null, done: false });
+  return arr[i];
+}
+
+/* ---------------- saving ---------------- */
+const saveTimers: Record<string, number> = {};
+function save(date: string, now = false) {
+  clearTimeout(saveTimers[date]);
+  const run = () => (days[date] ? put(days[date]) : remove(date)).catch(() => toast("Couldn't save. Try again."));
+  if (now) run(); else saveTimers[date] = window.setTimeout(run, 400);
+}
+
+/* ---------------- suggestions ---------------- */
+interface Hint { text: string; kg: number | null; up: boolean; last: SetLog[] | null }
+
+function lastSets(key: string): SetLog[] | null {
+  const tk = todayKey();
+  for (const d of sortedDates()) {
+    if (d === tk) continue;
+    const day = days[d];
+    for (const e of plan(day.session).ex) {
+      if (e.key !== key) continue;
+      const sets = (day.ex[e.id] || []).filter(s => s.done && (s.reps ?? 0) > 0);
+      if (sets.length) return sets;
+    }
+  }
+  return null;
+}
+
+function suggest(e: Exercise): Hint {
+  const last = lastSets(e.key);
+  if (!last) {
+    return e.kind === "bw"
+      ? { text: `${repsTxt(e)} at bodyweight`, kg: null, up: false, last }
+      : { text: "Pick a weight with 2 reps in the tank", kg: null, up: false, last };
+  }
+  const top = Math.max(0, ...last.map(s => s.kg ?? 0));
+  const atTop = last.filter(s => (s.kg ?? 0) === top);
+  if (e.fail) {
+    const total = atTop.reduce((a, s) => a + (s.reps ?? 0), 0);
+    return { text: `Beat ${total} total reps`, kg: top || null, up: false, last };
+  }
+  const hi = e.hi!, lo = e.lo!;
+  const allTop = atTop.length >= Math.min(2, e.sets) && atTop.every(s => (s.reps ?? 0) >= hi);
+  if (e.kind === "bw" && !top) {
+    return allTop
+      ? { text: e.inc ? "Add a little weight" : "Slow the reps down", kg: null, up: true, last }
+      : { text: `Aim for ${hi} each set`, kg: null, up: false, last };
+  }
+  if (allTop && e.inc) return { text: `Up to ${kg(top + e.inc)}kg`, kg: top + e.inc, up: true, last };
+  if (atTop.some(s => (s.reps ?? 0) < lo)) return { text: `Stay at ${kg(top)}kg`, kg: top, up: false, last };
+  return { text: `${kg(top)}kg, add a rep`, kg: top, up: false, last };
+}
+
+/* ---------------- render ---------------- */
+const TICK = `<svg viewBox="0 0 24 24" fill="none" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7"/></svg>`;
+
+function renderHeader() {
+  const now = new Date();
+  $("date").textContent = now.toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "short" });
+  const t = dowMon(now);
+  $("week").innerHTML = WEEK.map((w, i) => `<div class="day ${w.c} ${i === t ? "today" : ""}"><b>${w.d}</b><span>${w.t}</span></div>`).join("");
+}
+
+function renderTrain() {
+  const n = activeSession(), s = plan(n), nx = nextSession(), day = days[todayKey()];
+  const kind = WEEK[dowMon(new Date())].c;
+  const banner =
+    kind === "rugby" ? `<div class="banner"><b>Rugby tonight.</b> Not a gym day, but you can still log here.</div>` :
+    kind === "game" ? `<div class="banner"><b>Game day.</b> Nothing to lift. Session ${nx} is next.</div>` :
+    kind === "rest" ? `<div class="banner"><b>Rest day.</b> Session ${nx} is up on Monday.</div>` : "";
+
+  const chips = PLAN.map(p => `<button class="chip" data-pick="${p.n}" aria-pressed="${p.n === n}">
+      <b>${p.n}</b><small class="${p.n === nx && p.n !== n ? "next" : ""}">${p.n === nx ? "Up next" : esc(p.focus.split(",")[0])}</small></button>`).join("");
+
+  const groups: { ss?: string; items: Exercise[] }[] = [];
+  s.ex.forEach(e => {
+    const g = groups[groups.length - 1];
+    if (e.ss && g && g.ss === e.ss) g.items.push(e); else groups.push({ ss: e.ss, items: [e] });
+  });
+  const cards = groups.map(g => g.items.length > 1
+    ? `<section class="card ss"><div class="ss-tag">Superset · rest ${restTxt(g.items[0].rest)} after both</div>${g.items.map(e => exHTML(e, day)).join("")}</section>`
+    : `<section class="card">${exHTML(g.items[0], day)}</section>`).join("");
+
+  const x = day?.extra ?? { done: false, note: "" };
+  const extra = `<section class="card"><div class="extra ${x.done ? "done" : ""}" id="extra">
+      <span class="lbl">Extras</span><h2>${esc(s.extra.title)}</h2><p>${esc(s.extra.detail)}</p>
+      <div class="extra-row"><input id="extra-note" type="text" enterkeyhint="done" placeholder="${esc(s.extra.placeholder)}" value="${esc(x.note)}" aria-label="${esc(s.extra.title)} result">
+      <button class="tick" id="extra-tick" aria-label="Mark extras done">${TICK}</button></div></div></section>`;
+
+  const count = setsDone(day);
+  const foot = count ? `<div class="foot"><span class="num">${count} sets logged today</span>${confirmClear
+      ? `<span class="confirm">Clear today? <button class="danger" id="clear-yes">Clear</button><button id="clear-no">Keep</button></span>`
+      : `<button class="link" id="clear">Clear today</button>`}</div>` : "";
+
+  $("train").innerHTML = `${banner}
+    <div class="picker">${chips}</div>
+    <div class="title"><h1>${esc(s.title)}</h1><p>${esc(s.focus)} · ${s.ex.length} lifts plus extras</p></div>
+    ${cards}${extra}${foot}`;
+}
+
+// Today's weight carries down to the next set, so you only type it once.
+function carryKg(sets: SetLog[], i: number): number | null {
+  for (let j = i - 1; j >= 0; j--) if (sets[j]?.kg != null) return sets[j].kg;
+  return null;
+}
+
+function exHTML(e: Exercise, day?: DayLog): string {
+  const h = suggest(e);
+  const logged = day?.ex[e.id] ?? [];
+  const n = Math.max(e.sets, logged.length);
+  const lastTxt = h.last ? `Last ${h.last.map(s => (s.kg ? kg(s.kg) + "×" : "") + s.reps).join("  ")}` : "First time";
+  const rows = Array.from({ length: n }, (_, i) => {
+    const s = logged[i] ?? { kg: null, reps: null, done: false };
+    const carry = carryKg(logged, i);
+    const kgPh = carry != null ? kg(carry) : h.kg != null ? kg(h.kg) : e.kind === "bw" ? "0" : "";
+    return `<div class="set ${s.done ? "done" : ""}" data-ex="${e.id}" data-i="${i}">
+      <span class="n">${i + 1}</span>
+      <label class="field"><input id="${e.id}-${i}-kg" type="number" inputmode="decimal" step="0.5" placeholder="${kgPh}" value="${s.kg ?? ""}" data-f="kg" aria-label="${esc(e.name)} set ${i + 1} weight"><em>${unit(e)}</em></label>
+      <label class="field"><input id="${e.id}-${i}-reps" type="number" inputmode="numeric" placeholder="${e.fail ? "" : e.hi}" value="${s.reps ?? ""}" data-f="reps" aria-label="${esc(e.name)} set ${i + 1} reps"><em>reps</em></label>
+      <button class="tick" data-tick aria-label="Log set ${i + 1}">${TICK}</button></div>`;
+  }).join("");
+  return `<div class="ex">
+    <div class="ex-top"><div><h2>${esc(e.name)}</h2><div class="rx">${esc(e.setsTxt ?? e.sets + " sets")} · ${esc(repsTxt(e))} · rest ${restTxt(e.rest)}</div></div>
+      <button class="cue-btn" data-cue="${e.id}" aria-expanded="false">Cues</button></div>
+    <p class="cue" id="cue-${e.id}" hidden>${esc(e.cue)}</p>
+    <div class="hint"><span class="last num">${esc(lastTxt)}</span><span class="go ${h.up ? "up" : ""}">${esc(h.text)}</span></div>
+    <div class="sets">${rows}</div>
+    <button class="add" data-add="${e.id}">+ Add a set</button></div>`;
+}
+
+function renderProgress() {
+  const dates = sortedDates().filter(d => setsDone(days[d]) > 0);
+  const cut = new Date(); cut.setDate(cut.getDate() - 27);
+  const recent = dates.filter(d => d >= keyOf(cut));
+  let vol = 0;
+  recent.forEach(d => Object.values(days[d].ex).forEach(a => a.forEach(s => { if (s.done) vol += (s.kg ?? 0) * (s.reps ?? 0); })));
+
+  type Pt = { v: number };
+  const lifts: Record<string, { pts: Pt[]; best: { kg: number; reps: number; e1: number } | null }> = {};
+  dates.slice().reverse().forEach(d => {
+    const day = days[d];
+    plan(day.session).ex.forEach(e => {
+      const sets = (day.ex[e.id] || []).filter(s => s.done && (s.reps ?? 0) > 0);
+      if (!sets.length) return;
+      const L = lifts[e.key] || (lifts[e.key] = { pts: [], best: null });
+      const top = Math.max(0, ...sets.map(s => s.kg ?? 0));
+      const topReps = Math.max(...sets.filter(s => (s.kg ?? 0) === top).map(s => s.reps ?? 0));
+      L.pts.push({ v: top > 0 ? top : topReps });
+      sets.forEach(s => {
+        const e1 = (s.kg ?? 0) * (1 + (s.reps ?? 0) / 30);
+        if (!L.best || e1 > L.best.e1 || (!e1 && !L.best.e1 && (s.reps ?? 0) > L.best.reps)) L.best = { kg: s.kg ?? 0, reps: s.reps ?? 0, e1 };
+      });
+    });
+  });
+
+  const liftRows = Object.entries(lifts).sort((a, b) => LIFT_NAMES[a[0]].localeCompare(LIFT_NAMES[b[0]])).map(([k, L]) => {
+    const b = L.best!, weighted = b.e1 > 0, n = L.pts.length;
+    return `<div class="lift"><h3>${esc(LIFT_NAMES[k])}</h3>
+      <span class="pr num">${weighted ? `Best ${kg(b.kg)}kg × ${b.reps}` : `Best ${b.reps} reps`}</span>
+      <span class="meta">${weighted ? `Est. max ${Math.round(b.e1)}kg · ` : ""}${n} session${n > 1 ? "s" : ""}</span>
+      ${spark(L.pts.map(p => p.v), weighted ? "kg" : "")}</div>`;
+  }).join("");
+
+  const hist = dates.slice(0, 12).map(d => {
+    const day = days[d];
+    const label = new Date(d + "T12:00:00").toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
+    return `<div class="hist"><b>${label}</b><span class="num">Session ${day.session} · ${setsDone(day)} set${setsDone(day) === 1 ? "" : "s"}${day.extra.done ? " · extras" : ""}</span></div>`;
+  }).join("");
+
+  $("progress").innerHTML = `
+    <div class="title"><h1>Progress</h1></div>
+    <div class="stats">
+      <div class="stat"><span>Last 4 weeks</span><b class="num">${recent.length}<small>/12</small></b></div>
+      <div class="stat"><span>Volume</span><b class="num">${vol >= 1000 ? (vol / 1000).toFixed(1) + "t" : Math.round(vol) + "kg"}</b></div>
+      <div class="stat"><span>All time</span><b class="num">${dates.length}</b></div>
+    </div>
+    <h2 class="sec">Lifts</h2>
+    <section class="card">${liftRows || `<div class="empty">Log a session and every lift gets a best set and a trend line here.</div>`}</section>
+    <h2 class="sec">Recent sessions</h2>
+    <section class="card">${hist || `<div class="empty">No sessions yet.</div>`}</section>`;
+}
+
+function spark(vs: number[], u: string): string {
+  const W = 120, H = 50, P = 4, base = H - 12;
+  if (vs.length < 2) {
+    return `<svg viewBox="0 0 ${W} ${H}" aria-hidden="true"><line x1="${P}" y1="${base / 2 + 4}" x2="${W - P}" y2="${base / 2 + 4}" stroke="var(--line)" stroke-dasharray="3 4"/><circle cx="${W - P}" cy="${base / 2 + 4}" r="4" fill="var(--gold)"/></svg>`;
+  }
+  const lo = Math.min(...vs), hi = Math.max(...vs), span = hi - lo || 1;
+  const X = (i: number) => P + (i * (W - 2 * P)) / (vs.length - 1);
+  const Y = (v: number) => base - ((v - lo) / span) * (base - P - 4);
+  const pts = vs.map((v, i) => `${X(i).toFixed(1)},${Y(v).toFixed(1)}`);
+  return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Top set from ${kg(vs[0])} to ${kg(vs[vs.length - 1])}${u}">
+    <path d="M${X(0)},${base} L${pts.join(" L")} L${X(vs.length - 1)},${base} Z" fill="var(--gold)" fill-opacity=".16"/>
+    <polyline points="${pts.join(" ")}" fill="none" stroke="var(--gold)" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>
+    <circle cx="${X(vs.length - 1)}" cy="${Y(vs[vs.length - 1])}" r="4" fill="var(--gold)"/>
+    <text x="${P}" y="${H - 1}" font-size="10" fill="var(--muted)">${kg(vs[0])}</text>
+    <text x="${W - P}" y="${H - 1}" font-size="10" fill="var(--muted)" text-anchor="end">${kg(vs[vs.length - 1])}${u}</text></svg>`;
+}
+
+function renderBackup() {
+  const n = sortedDates().filter(d => setsDone(days[d]) > 0).length;
+  $("backup").innerHTML = `
+    <div class="title"><h1>Backup</h1><p>Your log lives only on this phone. Save a copy every couple of weeks.</p></div>
+    <div class="panel"><h2>Save a backup</h2><p>${n} session${n === 1 ? "" : "s"} logged. Save the file to iCloud Drive or Files.</p>
+      <button class="btn" id="export">Save backup file</button></div>
+    <div class="panel"><h2>Restore</h2><p>Replaces everything on this phone with the backup you pick.</p>
+      <label class="btn alt btn-file">Choose backup file<input type="file" id="import" accept="application/json,.json"></label></div>
+    <div class="panel"><h2>About</h2><p>gymplan runs the HHF 12 Week Turnover Start Up sessions across Monday, Wednesday and Friday. Works offline.</p></div>`;
+}
+
+function render() {
+  renderHeader();
+  $("train").hidden = view !== "train";
+  $("progress").hidden = view !== "progress";
+  $("backup").hidden = view !== "backup";
+  document.querySelectorAll<HTMLButtonElement>(".tabs button").forEach(b => b.setAttribute("aria-selected", String(b.dataset.view === view)));
+  if (view === "train") renderTrain(); else if (view === "progress") renderProgress(); else renderBackup();
+}
+function requestRender() {
+  const a = document.activeElement;
+  if (a && a.tagName === "INPUT") { pendingRender = true; return; }
+  render();
+}
+document.addEventListener("focusout", () => setTimeout(() => {
+  if (pendingRender && document.activeElement?.tagName !== "INPUT") { pendingRender = false; render(); }
+}, 60));
+
+/* ---------------- train interactions ---------------- */
+const train = $("train");
+
+train.addEventListener("input", ev => {
+  const t = ev.target as HTMLInputElement;
+  const d = today();
+  if (t.id === "extra-note") { d.extra.note = t.value; save(d.date); return; }
+  const row = t.closest<HTMLElement>(".set"); if (!row) return;
+  const e = findExercise(row.dataset.ex!)!, s = setRow(d, e, +row.dataset.i!);
+  const v = t.value === "" ? null : parseFloat(t.value);
+  (s as any)[t.dataset.f!] = v != null && isFinite(v) ? v : null;
+  save(d.date);
+});
+
+train.addEventListener("click", ev => {
+  const el = ev.target as HTMLElement;
+  const pick = el.closest<HTMLElement>("[data-pick]");
+  if (pick) {
+    const n = +pick.dataset.pick!, d = days[todayKey()];
+    if (d) { d.session = n; save(d.date, true); } else pickedSession = n;
+    confirmClear = false; render(); window.scrollTo({ top: 0 }); return;
+  }
+  const cue = el.closest<HTMLElement>("[data-cue]");
+  if (cue) { const p = $("cue-" + cue.dataset.cue); p.hidden = !p.hidden; cue.setAttribute("aria-expanded", String(!p.hidden)); return; }
+  const add = el.closest<HTMLElement>("[data-add]");
+  if (add) { const e = findExercise(add.dataset.add!)!, d = today(); setRow(d, e, Math.max(e.sets, (d.ex[e.id] || []).length)); save(d.date); render(); return; }
+  if (el.closest("#extra-tick")) {
+    const d = today(); d.extra.done = !d.extra.done; $("extra").classList.toggle("done", d.extra.done);
+    if (d.extra.done) buzz(); save(d.date, true); return;
+  }
+  if (el.closest("#clear")) { confirmClear = true; render(); return; }
+  if (el.closest("#clear-no")) { confirmClear = false; render(); return; }
+  if (el.closest("#clear-yes")) { const k = todayKey(); delete days[k]; confirmClear = false; save(k, true); render(); toast("Today cleared"); return; }
+
+  const tick = el.closest<HTMLElement>("[data-tick]");
+  if (tick) {
+    unlockAudio();
+    const row = tick.closest<HTMLElement>(".set")!, e = findExercise(row.dataset.ex!)!, i = +row.dataset.i!;
+    const d = today(), s = setRow(d, e, i);
+    if (!s.done) {
+      const h = suggest(e);
+      const carry = carryKg(d.ex[e.id] || [], i);
+      if (s.kg == null) s.kg = carry ?? h.kg;
+      if (s.reps == null && !e.fail) s.reps = e.hi;
+      if (s.reps == null) { toast("Enter your reps first"); row.querySelector<HTMLInputElement>('[data-f="reps"]')!.focus(); return; }
+      s.done = true;
+      row.classList.add("done");
+      row.querySelector<HTMLInputElement>('[data-f="kg"]')!.value = s.kg != null ? String(s.kg) : "";
+      row.querySelector<HTMLInputElement>('[data-f="reps"]')!.value = String(s.reps);
+      // show this weight as the starting point for the sets below
+      document.querySelectorAll<HTMLInputElement>(`.set[data-ex="${e.id}"] [data-f="kg"]`).forEach((inp, j) => {
+        if (j > i && s.kg != null) inp.placeholder = kg(s.kg);
+      });
+      buzz();
+      afterSet(e, i);
+    } else { s.done = false; row.classList.remove("done"); }
+    save(d.date, true);
+  }
+});
+
+function afterSet(e: Exercise, i: number) {
+  const s = plan(activeSession()), idx = s.ex.findIndex(x => x.id === e.id), partner = s.ex[idx + 1];
+  if (e.ss && partner && partner.ss === e.ss) { toast(`Straight into ${partner.name}`); return; }
+  const total = Math.max(e.sets, (today().ex[e.id] || []).length);
+  let next: string;
+  if (i + 1 < total) {
+    const first = e.ss ? s.ex.find(x => x.ss === e.ss)! : e;
+    next = `Set ${i + 2}, ${first.name}`;
+  } else next = partner ? `Next: ${partner.name}` : `Extras: ${s.extra.title}`;
+  startRest(e.rest, next);
+}
+
+/* ---------------- rest timer ---------------- */
+const T = { end: 0, total: 0, iv: 0, fired: false };
+function startRest(sec: number, label: string) {
+  T.total = sec; T.end = Date.now() + sec * 1000; T.fired = false;
+  $("t-next").textContent = label; $("t-sub").textContent = `Rest ${restTxt(sec)}`;
+  $("timer").classList.add("on"); $("timer").classList.remove("over");
+  clearInterval(T.iv); T.iv = window.setInterval(tickTimer, 250); tickTimer(); wake();
+}
+function tickTimer() {
+  const ms = T.end - Date.now(), left = Math.round(ms / 1000), a = Math.abs(left);
+  $("t-clock").textContent = `${left < 0 ? "+" : ""}${Math.floor(a / 60)}:${pad(a % 60)}`;
+  $("t-prog").style.width = `${Math.min(100, Math.max(0, (1 - ms / (T.total * 1000)) * 100))}%`;
+  if (left <= 0 && !T.fired) {
+    T.fired = true; $("timer").classList.add("over"); $("t-sub").textContent = "Go"; beep(); buzz([200, 100, 200]);
+  }
+}
+$("t-plus").onclick = () => { T.end += 15000; T.total += 15; T.fired = false; $("timer").classList.remove("over"); tickTimer(); };
+$("t-done").onclick = () => { clearInterval(T.iv); $("timer").classList.remove("on", "over"); };
+document.addEventListener("visibilitychange", () => { if (!document.hidden && $("timer").classList.contains("on")) { tickTimer(); wake(); } });
+
+let actx: AudioContext | null = null;
+function unlockAudio() {
+  try {
+    if (!actx) { const A = window.AudioContext || (window as any).webkitAudioContext; if (A) actx = new A(); }
+    if (actx && actx.state === "suspended") actx.resume();
+  } catch { /* no audio */ }
+}
+function beep() {
+  if (!actx) return;
+  try {
+    [0, 0.22, 0.44].forEach((t, k) => {
+      const o = actx!.createOscillator(), g = actx!.createGain(), at = actx!.currentTime + t;
+      o.frequency.value = k === 2 ? 1320 : 880;
+      g.gain.setValueAtTime(0.0001, at);
+      g.gain.exponentialRampToValueAtTime(0.4, at + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, at + 0.18);
+      o.connect(g).connect(actx!.destination); o.start(at); o.stop(at + 0.2);
+    });
+  } catch { /* no audio */ }
+}
+function buzz(p: number | number[] = 15) { try { navigator.vibrate?.(p); } catch { /* iOS ignores */ } }
+
+let lock: WakeLockSentinel | null = null;
+async function wake() {
+  try { if (!lock && "wakeLock" in navigator) { lock = await navigator.wakeLock.request("screen"); lock.addEventListener("release", () => { lock = null; }); } }
+  catch { /* not granted */ }
+}
+
+let tt = 0;
+function toast(msg: string) {
+  const el = $("toast"); el.textContent = msg; el.classList.add("on");
+  clearTimeout(tt); tt = window.setTimeout(() => el.classList.remove("on"), 1800);
+}
+
+/* ---------------- backup ---------------- */
+$("backup").addEventListener("click", ev => {
+  if (!(ev.target as HTMLElement).closest("#export")) return;
+  const data = { app: "gymplan", version: 1, exported: new Date().toISOString(), days: Object.values(days).filter(d => setsDone(d) > 0 || d.extra.note) };
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+  const name = `gymplan-backup-${todayKey()}.json`;
+  const file = new File([blob], name, { type: "application/json" });
+  if (navigator.canShare?.({ files: [file] })) {
+    navigator.share({ files: [file], title: name }).catch(() => { /* cancelled */ });
+  } else {
+    const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = name;
+    document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+  }
+});
+$("backup").addEventListener("change", async ev => {
+  const input = ev.target as HTMLInputElement;
+  if (input.id !== "import" || !input.files?.[0]) return;
+  try {
+    const parsed = JSON.parse(await input.files[0].text());
+    if (parsed.app !== "gymplan" || !Array.isArray(parsed.days)) throw new Error("bad");
+    const list: DayLog[] = parsed.days.filter((d: DayLog) => d && d.date && d.session >= 1 && d.session <= 4);
+    await replaceAll(list);
+    days = {}; list.forEach(d => { days[d.date] = d; });
+    toast(`Restored ${list.length} days`); render();
+  } catch { toast("That file isn't a gymplan backup"); }
+  input.value = "";
+});
+
+/* ---------------- tabs & boot ---------------- */
+document.querySelectorAll<HTMLButtonElement>(".tabs button").forEach(b => b.addEventListener("click", () => {
+  view = b.dataset.view as typeof view; confirmClear = false; render(); window.scrollTo({ top: 0 });
+}));
+
+// Roll over to a new day if the app is left open overnight.
+let shownDay = todayKey();
+setInterval(() => { if (todayKey() !== shownDay) { shownDay = todayKey(); pickedSession = null; requestRender(); } }, 60000);
+
+(async () => {
+  try { days = await loadAll(); } catch { toast("Storage unavailable. Logs won't save."); }
+  render();
+  askPersist();
+})();
