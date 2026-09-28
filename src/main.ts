@@ -9,6 +9,18 @@ import { PLAN, WEEK, SESSION_DAY, LIFT_NAMES, findExercise, type Exercise, type 
 import { barChart, lineChart, wireCharts } from "./charts";
 import { loadAll, put, remove, replaceAll, askPersist, loadGames, putGame, removeGame, replaceGames, type DayLog, type SetLog, type Game } from "./store";
 
+/* ---------------- appearance ---------------- */
+type Theme = "system" | "light" | "dark";
+function getTheme(): Theme { try { return (localStorage.getItem("gymplan-theme") as Theme) || "system"; } catch { return "system"; } }
+function applyTheme(t: Theme) {
+  const root = document.documentElement;
+  if (t === "system") root.removeAttribute("data-theme"); else root.setAttribute("data-theme", t);
+  const dark = t === "dark" || (t === "system" && matchMedia("(prefers-color-scheme: dark)").matches);
+  document.querySelectorAll<HTMLMetaElement>('meta[name="theme-color"]').forEach(m => { m.content = dark ? "#0B1526" : "#F5F6F8"; m.removeAttribute("media"); });
+}
+applyTheme(getTheme());
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => applyTheme(getTheme()));
+
 /* ---------------- state ---------------- */
 let days: Record<string, DayLog> = {};
 let view: "train" | "progress" | "games" | "backup" = "train";
@@ -299,6 +311,10 @@ function renderBackup() {
       <button class="btn" id="export">Save backup file</button></div>
     <div class="panel"><h2>Restore</h2><p>Replaces everything on this phone with the backup you pick.</p>
       <label class="btn alt btn-file">Choose backup file<input type="file" id="import" accept="application/json,.json"></label></div>
+    <div class="panel"><h2>Appearance</h2><p>Auto follows your phone's light and dark setting.</p>
+      <div class="seg theme" role="group" aria-label="Appearance">
+        ${(["system", "light", "dark"] as const).map(t => `<button type="button" data-theme-pick="${t}" aria-pressed="${getTheme() === t}">${t === "system" ? "Auto" : t[0].toUpperCase() + t.slice(1)}</button>`).join("")}
+      </div></div>
     <div class="panel"><h2>About</h2><p>gymplan runs the HHF 12 Week Turnover Start Up sessions across Monday, Wednesday and Friday. Works offline.</p></div>`;
 }
 
@@ -455,6 +471,12 @@ function toast(msg: string) {
 
 /* ---------------- backup ---------------- */
 $("backup").addEventListener("click", ev => {
+  const tp = (ev.target as HTMLElement).closest<HTMLElement>("[data-theme-pick]");
+  if (tp) {
+    const t = tp.dataset.themePick as Theme;
+    try { localStorage.setItem("gymplan-theme", t); } catch { /* private mode */ }
+    applyTheme(t); renderBackup(); return;
+  }
   if (!(ev.target as HTMLElement).closest("#export")) return;
   const data = { app: "gymplan", version: 1, exported: new Date().toISOString(), days: Object.values(days).filter(d => setsDone(d) > 0 || d.extra.note), games };
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
