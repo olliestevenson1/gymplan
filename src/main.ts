@@ -5,7 +5,7 @@ import "@fontsource/figtree/500";
 import "@fontsource/figtree/600";
 import "@fontsource/figtree/700";
 import "./style.css";
-import { PLAN, WEEK, SESSION_DAY, LIFT_NAMES, findExercise, type Exercise, type Session } from "./plan";
+import { PLAN, WEEK, SESSION_DAY, LIFT_NAMES, findExercise, sessionFor, type Exercise, type Session, type Where } from "./plan";
 import { barChart, lineChart, wireCharts } from "./charts";
 import { loadAll, put, remove, replaceAll, askPersist, loadGames, putGame, removeGame, replaceGames, type DayLog, type SetLog, type Game } from "./store";
 
@@ -29,6 +29,7 @@ let gameForm: Game | null = null;   // open form (new or editing)
 let confirmGameDelete = false;
 let teamFilter: "all" | "1st" | "2nd" = "all";
 let pickedSession: number | null = null;
+let pickedWhere: Where | null = null;
 let confirmClear = false;
 let pendingRender = false;
 
@@ -41,11 +42,17 @@ const esc = (s: unknown) => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&am
 const kg = (v: number) => String(Math.round(v * 10) / 10);
 const restTxt = (s: number) => (s >= 60 ? (s % 60 ? `${Math.floor(s / 60)}:${pad(s % 60)}` : `${s / 60} min`) : `${s}s`);
 const repsTxt = (e: Exercise) => e.repsTxt ?? (e.fail ? "to failure" : e.lo === e.hi ? `${e.lo} reps` : `${e.lo} to ${e.hi} reps`);
-const unit = (e: Exercise) => (e.kind === "bw" ? "+kg" : e.kind === "db" ? "kg ea" : "kg");
+const unit = (e: Exercise) => (e.kind === "bw" ? "+kg" : e.kind === "db" ? "kg ea" : e.kind === "band" ? "band" : "kg");
 
 const sortedDates = () => Object.keys(days).sort().reverse();
 const setsDone = (d?: DayLog) => (d ? Object.values(d.ex).reduce((n, a) => n + a.filter(s => s.done).length, 0) : 0);
-const plan = (n: number): Session => PLAN[n - 1];
+const plan = (n: number, where: Where = "gym"): Session => sessionFor(n, where);
+// Every exercise that could hold sets on a given day, gym and home versions both,
+// so switching the toggle after logging never hides anything from history.
+const dayExercises = (d: DayLog): Exercise[] => {
+  const gym = sessionFor(d.session, "gym").ex, home = sessionFor(d.session, "home").ex.filter(e => e.replaces);
+  return [...gym, ...home];
+};
 
 function nextSession(): number {
   const tk = todayKey();
@@ -62,9 +69,12 @@ function activeSession(): number {
   const suggested = WEEK[dowMon(new Date())].s;
   return suggested || nextSession();
 }
+function activeWhere(): Where {
+  return days[todayKey()]?.where ?? pickedWhere ?? "gym";
+}
 function today(): DayLog {
   const tk = todayKey();
-  if (!days[tk]) days[tk] = { date: tk, session: activeSession(), ex: {}, extra: { done: false, note: "" }, updated: Date.now() };
+  if (!days[tk]) days[tk] = { date: tk, session: activeSession(), where: activeWhere(), ex: {}, extra: { done: false, note: "" }, updated: Date.now() };
   return days[tk];
 }
 function setRow(d: DayLog, e: Exercise, i: number): SetLog {
@@ -89,7 +99,7 @@ function lastSets(key: string): SetLog[] | null {
   for (const d of sortedDates()) {
     if (d === tk) continue;
     const day = days[d];
-    for (const e of plan(day.session).ex) {
+    for (const e of dayExercises(day)) {
       if (e.key !== key) continue;
       const sets = (day.ex[e.id] || []).filter(s => s.done && (s.reps ?? 0) > 0);
       if (sets.length) return sets;
@@ -100,6 +110,12 @@ function lastSets(key: string): SetLog[] | null {
 
 function suggest(e: Exercise): Hint {
   const last = lastSets(e.key);
+  if (e.kind === "band") {
+    if (!last) return { text: `Pick a band for ${repsTxt(e)}`, kg: null, up: false, last };
+    const lvl = Math.max(0, ...last.map(s => s.kg ?? 0));
+    const hit = last.every(s => (s.reps ?? 0) >= (e.hi ?? 0));
+    return hit ? { text: "Move up a band", kg: lvl ? lvl + 1 : null, up: true, last } : { text: lvl ? `Band ${lvl}, add a rep` : `Aim for ${e.hi} each set`, kg: lvl || null, up: false, last };
+  }
   if (!last) {
     return e.kind === "bw"
       ? { text: `${repsTxt(e)} at bodyweight`, kg: null, up: false, last }
@@ -134,7 +150,7 @@ function renderHeader() {
 }
 
 function renderTrain() {
-  const n = activeSession(), s = plan(n), nx = nextSession(), day = days[todayKey()];
+  const n = activeSession(), where = activeWhere(), s = plan(n, where), nx = nextSession(), day = days[todayKey()];
   const kind = WEEK[dowMon(new Date())].c;
   const banner =
     kind === "rugby" ? `<div class="banner"><b>Rugby tonight.</b> Not a gym day, but you can still log here.</div>` :
@@ -167,6 +183,11 @@ function renderTrain() {
   $("train").innerHTML = `${banner}
     <div class="picker">${chips}</div>
     <div class="title"><h1>${esc(s.title)}</h1><p>${esc(s.focus)} · ${s.ex.length} lifts plus extras</p></div>
+    <div class="seg where" role="group" aria-label="Where are you training?">
+      <button type="button" data-where="gym" aria-pressed="${where === "gym"}">Gym</button>
+      <button type="button" data-where="home" aria-pressed="${where === "home"}">Home gym</button>
+    </div>
+    ${where === "home" ? `<p class="where-note">${s.ex.filter(e => e.replaces).length ? `${s.ex.filter(e => e.replaces).length} exercise${s.ex.filter(e => e.replaces).length === 1 ? "" : "s"} swapped for your home kit, marked in gold.` : "Nothing to swap, your home kit covers this session."}</p>` : ""}
     ${cards}${extra}${foot}`;
 }
 
@@ -180,7 +201,7 @@ function exHTML(e: Exercise, day?: DayLog): string {
   const h = suggest(e);
   const logged = day?.ex[e.id] ?? [];
   const n = Math.max(e.sets, logged.length);
-  const lastTxt = h.last ? `Last ${h.last.map(s => (s.kg ? kg(s.kg) + "×" : "") + s.reps).join("  ")}` : "First time";
+  const lastTxt = h.last ? `Last ${h.last.map(s => (s.kg ? (e.kind === "band" ? "B" + kg(s.kg) : kg(s.kg)) + "×" : "") + s.reps).join("  ")}` : "First time";
   const rows = Array.from({ length: n }, (_, i) => {
     const s = logged[i] ?? { kg: null, reps: null, done: false };
     const carry = carryKg(logged, i);
@@ -192,7 +213,7 @@ function exHTML(e: Exercise, day?: DayLog): string {
       <button class="tick" data-tick aria-label="Log set ${i + 1}">${TICK}</button></div>`;
   }).join("");
   return `<div class="ex">
-    <div class="ex-top"><div><h2>${esc(e.name)}</h2><div class="rx">${esc(e.setsTxt ?? e.sets + " sets")} · ${esc(repsTxt(e))} · rest ${restTxt(e.rest)}</div></div>
+    <div class="ex-top"><div>${e.replaces ? `<span class="swap">Home swap for ${esc(e.replaces)}</span>` : ""}<h2>${esc(e.name)}</h2><div class="rx">${esc(e.setsTxt ?? e.sets + " sets")} · ${esc(repsTxt(e))} · rest ${restTxt(e.rest)}</div></div>
       <button class="cue-btn" data-cue="${e.id}" aria-expanded="false">Cues</button></div>
     <div class="cue" id="cue-${e.id}" hidden>
       <p><b>Set up</b>${esc(e.cue.setup)}</p>
@@ -214,7 +235,8 @@ function renderProgress() {
   const dates = sortedDates().filter(d => setsDone(days[d]) > 0);
   const cut = new Date(); cut.setDate(cut.getDate() - 27);
   const recent = dates.filter(d => d >= keyOf(cut));
-  const dayVol = (d: string) => Object.values(days[d].ex).reduce((a, arr) => a + arr.reduce((b, st) => b + (st.done ? (st.kg ?? 0) * (st.reps ?? 0) : 0), 0), 0);
+  const dayVol = (d: string) => Object.entries(days[d].ex).reduce((a, [id, arr]) =>
+    findExercise(id)?.kind === "band" ? a : a + arr.reduce((b, st) => b + (st.done ? (st.kg ?? 0) * (st.reps ?? 0) : 0), 0), 0);
   const vol = recent.reduce((a, d) => a + dayVol(d), 0);
 
   // last 8 training weeks, Monday to Sunday
@@ -239,16 +261,18 @@ function renderProgress() {
   const lifts: Record<string, { pts: LP[]; best: { kg: number; reps: number; e1: number } | null }> = {};
   dates.slice().reverse().forEach(d => {
     const day = days[d];
-    plan(day.session).ex.forEach(e => {
+    dayExercises(day).forEach(e => {
       const sets = (day.ex[e.id] || []).filter(st => st.done && (st.reps ?? 0) > 0);
       if (!sets.length) return;
       const L = lifts[e.key] || (lifts[e.key] = { pts: [], best: null });
-      const top = Math.max(0, ...sets.map(st => st.kg ?? 0));
-      const reps = Math.max(...sets.filter(st => (st.kg ?? 0) === top).map(st => st.reps ?? 0));
+      const band = e.kind === "band";   // band level isn't a weight, so track reps
+      const kgOf = (st: SetLog) => (band ? 0 : st.kg ?? 0);
+      const top = Math.max(0, ...sets.map(kgOf));
+      const reps = Math.max(...sets.filter(st => kgOf(st) === top).map(st => st.reps ?? 0));
       L.pts.push({ d, top, reps });
       sets.forEach(st => {
-        const e1 = (st.kg ?? 0) * (1 + (st.reps ?? 0) / 30);
-        if (!L.best || e1 > L.best.e1 || (!e1 && !L.best.e1 && (st.reps ?? 0) > L.best.reps)) L.best = { kg: st.kg ?? 0, reps: st.reps ?? 0, e1 };
+        const e1 = kgOf(st) * (1 + (st.reps ?? 0) / 30);
+        if (!L.best || e1 > L.best.e1 || (!e1 && !L.best.e1 && (st.reps ?? 0) > L.best.reps)) L.best = { kg: kgOf(st), reps: st.reps ?? 0, e1 };
       });
     });
   });
@@ -363,6 +387,12 @@ train.addEventListener("click", ev => {
     if (d) { d.session = n; save(d.date, true); } else pickedSession = n;
     confirmClear = false; render(); window.scrollTo({ top: 0 }); return;
   }
+  const wh = el.closest<HTMLElement>("[data-where]");
+  if (wh) {
+    const w = wh.dataset.where as Where, d = days[todayKey()];
+    if (d) { d.where = w; save(d.date, true); } else pickedWhere = w;
+    render(); return;
+  }
   const cue = el.closest<HTMLElement>("[data-cue]");
   if (cue) { const p = $("cue-" + cue.dataset.cue); p.hidden = !p.hidden; cue.setAttribute("aria-expanded", String(!p.hidden)); return; }
   const rm = el.closest<HTMLElement>("[data-remove]");
@@ -409,7 +439,7 @@ train.addEventListener("click", ev => {
 });
 
 function afterSet(e: Exercise, i: number) {
-  const s = plan(activeSession()), idx = s.ex.findIndex(x => x.id === e.id), partner = s.ex[idx + 1];
+  const s = plan(activeSession(), activeWhere()), idx = s.ex.findIndex(x => x.id === e.id), partner = s.ex[idx + 1];
   if (e.ss && partner && partner.ss === e.ss) { toast(`Straight into ${partner.name}`); return; }
   const total = Math.max(e.sets, (today().ex[e.id] || []).length);
   let next: string;

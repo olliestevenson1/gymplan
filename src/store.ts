@@ -4,6 +4,7 @@ export interface SetLog { kg: number | null; reps: number | null; done: boolean 
 export interface DayLog {
   date: string;                       // YYYY-MM-DD, local
   session: number;                    // 1 to 4
+  where?: "gym" | "home";             // home gym swaps the exercises that need kit you don't have
   ex: Record<string, SetLog[]>;       // exercise id -> sets
   extra: { done: boolean; note: string };
   updated: number;

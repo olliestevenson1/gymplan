@@ -19,11 +19,17 @@ export interface Exercise {
   repsTxt?: string;
   rest: number;        // seconds
   inc: number;         // kg to add when progressing
-  kind: "bar" | "db" | "machine" | "bw";
+  kind: "bar" | "db" | "machine" | "bw" | "band";   // band: the weight box logs band level
   fail?: boolean;
   ss?: string;         // superset group
   cue: Cue;
+  replaces?: string;   // set on a home swap: the gym exercise it stands in for
 }
+
+// The home version of an exercise. Anything not given is kept from the gym version
+// (sets, reps, rest and superset stay exactly as HHF wrote them).
+export type HomeSwap = Pick<Exercise, "name" | "key" | "kind" | "inc" | "cue"> & Partial<Pick<Exercise, "repsTxt" | "fail">>;
+export type Where = "gym" | "home";
 
 export interface Session {
   n: number;
@@ -31,6 +37,7 @@ export interface Session {
   focus: string;
   ex: Exercise[];
   extra: { title: string; detail: string; placeholder: string };
+  homeExtra?: string;   // replacement detail for the extras at home
 }
 
 /* ---------- shared cues ---------- */
@@ -68,6 +75,158 @@ const CURL_STEPS = [
   "Lower slowly, over 2 to 3 seconds, until your arms are fully straight.",
 ];
 const CURL_AVOID = "Rocking your body to swing the weight up, or elbows drifting forward.";
+
+
+/* ---------- home gym swaps ----------
+   Home kit: rack, barbell and plates, a bench, dumbbells up to 10kg, resistance bands,
+   a rowing machine and a Peloton. Only lifts that need a cable, a machine or heavier
+   dumbbells are swapped. */
+
+const BAND_PULLDOWN: HomeSwap = {
+  name: "Band lat pulldown", key: "bandpulldown", kind: "band", inc: 1,
+  cue: {
+    setup: "Loop a band over the top of the rack. Kneel facing it, arms straight up holding the band, torso tall.",
+    steps: [
+      "Pull your shoulder blades down first.",
+      "Drive your elbows down to your sides until your hands reach your upper chest.",
+      "Squeeze your back, then let your arms rise slowly until they're straight.",
+    ],
+    avoid: "Leaning back to use your bodyweight, or letting the band snap your arms back up.",
+    note: "Log your band as a level, lightest band is 1. Kneel further back to make it harder.",
+  },
+};
+const BB_CURL: HomeSwap = {
+  name: "Barbell curl", key: "bbcurl", kind: "bar", inc: 2.5,
+  cue: {
+    setup: "Stand tall holding the barbell with an underhand grip at shoulder width, elbows tucked at your sides.",
+    steps: CURL_STEPS,
+    avoid: CURL_AVOID,
+    note: "The empty bar may be plenty to start. Straight into band pushdowns, then rest.",
+  },
+};
+const BAND_PUSHDOWN: HomeSwap = {
+  name: "Band tricep pushdown", key: "bandpushdown", kind: "band", inc: 1,
+  cue: {
+    setup: "Loop a band over the top of the rack. Stand facing it, elbows pinned to your sides, hands at chest height.",
+    steps: [
+      "Push down until your arms are fully straight.",
+      "Squeeze your triceps at the bottom and pull the band slightly apart.",
+      "Let your hands rise back to chest height, elbows staying put.",
+    ],
+    avoid: "Elbows drifting forward or flaring out, or leaning your bodyweight into it.",
+    note: "Log your band as a level. Step back from the rack to make it harder. Rest once you've done both exercises.",
+  },
+};
+
+export const HOME: Record<string, HomeSwap> = {
+  s1_hamcurl: {
+    name: "Slider hamstring curl", key: "sliderhamcurl", kind: "bw", inc: 0,
+    cue: {
+      setup: "Lie on your back on a smooth floor, heels on a towel or sliders, knees bent, arms by your sides.",
+      steps: [
+        "Lift your hips into a bridge so you're straight from shoulders to knees.",
+        "Keeping your hips up, slide your heels away until your legs are almost straight.",
+        "Pull your heels back in towards your bum, still holding the bridge.",
+      ],
+      avoid: "Letting your hips drop as your legs straighten.",
+      note: "HHF's own suggestion for no machine. Too easy? Do them one leg at a time.",
+    },
+  },
+  s1_shrug: {
+    name: "Barbell shrugs", key: "shrugs", kind: "bar", inc: 5,
+    cue: {
+      setup: "Take the barbell from the rack at mid thigh height, hands just outside your thighs, standing tall.",
+      steps: SHRUG_STEPS,
+      avoid: SHRUG_AVOID,
+      note: "Your dumbbells stop at 10kg, so the barbell keeps this heavy. Straight into lateral raises, then rest.",
+    },
+  },
+  s2_fly: {
+    name: "Dumbbell fly", key: "dbfly", kind: "db", inc: 1, fail: true,
+    cue: {
+      setup: "Lie on the bench with a dumbbell in each hand above your chest, palms facing each other, a slight bend in your elbows.",
+      steps: [
+        "Keeping that bend fixed, open your arms out wide in an arc.",
+        "Lower until you feel a stretch across your chest, hands roughly level with the bench.",
+        "Squeeze your chest to bring the dumbbells back together over your chest.",
+      ],
+      avoid: "Bending your elbows more as you lower, which turns it into a press.",
+      note: "10kg is plenty for a fly. Take both sets to failure.",
+    },
+  },
+  s2_pulldown: BAND_PULLDOWN,
+  s3_pulldown: BAND_PULLDOWN,
+  s2_curl: BB_CURL,
+  s4_curl: BB_CURL,
+  s2_pushdown: BAND_PUSHDOWN,
+  s4_pushdown: BAND_PUSHDOWN,
+  s3_incline: {
+    name: "Incline barbell press", key: "inclinebb", kind: "bar", inc: 2.5,
+    cue: {
+      setup: "Bench at about 30 degrees inside the rack, safety pins just above chest height. Grip just wider than your shoulders, shoulder blades pulled back.",
+      steps: [
+        "Unrack and hold the bar over your upper chest.",
+        "Lower under control to just below your collarbones, elbows about 45 degrees out.",
+        "Press back up to straight arms.",
+      ],
+      avoid: "Bouncing the bar off your chest or your bum lifting off the bench.",
+      note: "If your bench doesn't incline, do flat barbell press and take 3 seconds to lower each rep. Set the safety pins every time you train alone.",
+    },
+  },
+  s3_situp: {
+    name: "Floor sit up", key: "floorsitup", kind: "bw", inc: 2.5,
+    cue: {
+      setup: "Lie on the floor, knees bent, feet hooked under the barbell set low in the rack. Hands across your chest.",
+      steps: [
+        "Brace your stomach and curl your torso up off the floor, chin tucked.",
+        "Keep going until you're sitting upright.",
+        "Lower back down slowly until your upper back touches the floor.",
+      ],
+      avoid: "Pulling on your neck, or dropping back down fast.",
+      note: "Hold a plate or a dumbbell on your chest once 12 reps gets easy.",
+    },
+  },
+  s4_lunge: {
+    name: "Barbell reverse lunge", key: "bbrevlunge", kind: "bar", inc: 2.5, repsTxt: "12 total",
+    cue: {
+      setup: "Bar on your upper back from the rack, feet hip width, standing tall.",
+      steps: [
+        "Step one foot back into a long stride.",
+        "Lower until your back knee gently touches the floor, front shin close to vertical.",
+        "Push through your front heel to step back to standing, then switch legs.",
+      ],
+      avoid: "Your front knee caving in, or leaning forward over your front leg.",
+      note: "Safer than walking with a bar in a small space. 12 total, 6 each leg. Walking lunges holding your 10kg dumbbells also work.",
+    },
+  },
+  s4_dbpress: {
+    name: "Barbell overhead press", key: "ohp", kind: "bar", inc: 2.5,
+    cue: {
+      setup: "Take the bar from the rack at shoulder height, hands just outside your shoulders, feet hip width.",
+      steps: [
+        "Squeeze your glutes and brace.",
+        "Press straight up, moving your head back so the bar clears your chin.",
+        "Push your head through under the bar at the top, arms locked.",
+        "Lower under control to your shoulders.",
+      ],
+      avoid: "Leaning back to get the bar up, or dipping your legs, which turns it into a push press.",
+      note: "Standing, or seated on the bench. Your dumbbells stop at 10kg, so the barbell keeps this heavy.",
+    },
+  },
+  s4_cablerow: {
+    name: "Band seated row", key: "bandrow", kind: "band", inc: 1,
+    cue: {
+      setup: "Loop a band low on the rack. Sit on the floor facing it, legs out with a slight knee bend, back upright.",
+      steps: [
+        "Start with your arms straight, letting your shoulder blades stretch forward.",
+        "Pull your hands to your stomach, driving your elbows back.",
+        "Squeeze your shoulder blades together, then return slowly.",
+      ],
+      avoid: "Rocking your torso back to finish the rep.",
+      note: "Log your band as a level. Sit further back to make it harder.",
+    },
+  },
+};
 
 export const PLAN: Session[] = [
   {
@@ -203,6 +362,7 @@ export const PLAN: Session[] = [
         cue: { ...PUSHDOWN, note: "Rest once you've done both exercises." } },
     ],
     extra: { title: "Bike sprints", detail: "Assault bike or standard bike. 2 sets of 8 rounds: 20s sprint, 10s rest, with 2 to 3 min between sets.", placeholder: "Notes, e.g. level 12" },
+    homeExtra: "On the Peloton. 2 sets of 8 rounds: 20s sprint, 10s rest, with 2 to 3 min between sets.",
   },
   {
     n: 3, title: "Session 3", focus: "Box squat, incline, rows",
@@ -321,12 +481,14 @@ export const PLAN: Session[] = [
         cue: { ...PUSHDOWN, note: "Rest once you've done both exercises." } },
     ],
     extra: { title: "Steady bike", detail: "20 to 40 minutes at 130 to 160 bpm.", placeholder: "Minutes and avg HR" },
+    homeExtra: "On the Peloton. 20 to 40 minutes at 130 to 160 bpm, a low impact ride works well.",
   },
 ];
 
 export const LIFT_NAMES: Record<string, string> = (() => {
   const m: Record<string, string> = {};
   PLAN.forEach(s => s.ex.forEach(e => { if (!m[e.key]) m[e.key] = e.name; }));
+  Object.values(HOME).forEach(h => { if (!m[h.key]) m[h.key] = h.name; });
   m.shrugs = "Shrugs"; m.pulldown = "Lat pulldown"; m.dbshrugs = "Dumbbell shrugs";
   return m;
 })();
@@ -344,7 +506,22 @@ export const WEEK = [
 
 export const SESSION_DAY: Record<number, string> = { 1: "Mon", 2: "Wed", 3: "Fri", 4: "Sun" };
 
+// The session as it should be done at the gym or at home.
+export function sessionFor(n: number, where: Where): Session {
+  const s = PLAN[n - 1];
+  if (where === "gym") return s;
+  return {
+    ...s,
+    ex: s.ex.map(e => {
+      const h = HOME[e.id];
+      return h ? { ...e, ...h, id: e.id + "_h", replaces: e.name } : e;
+    }),
+    extra: { ...s.extra, detail: s.homeExtra ?? s.extra.detail },
+  };
+}
+
 export function findExercise(id: string): Exercise | undefined {
-  for (const s of PLAN) for (const e of s.ex) if (e.id === id) return e;
+  for (const n of [1, 2, 3, 4]) for (const w of ["gym", "home"] as const)
+    for (const e of sessionFor(n, w).ex) if (e.id === id) return e;
   return undefined;
 }
