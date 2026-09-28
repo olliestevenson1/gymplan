@@ -1,5 +1,5 @@
 // HHF 12 Week Turnover, Start Up phase. Four sessions, with Ollie's swaps:
-// S1 dumbbell shrugs, S2 cable curls and cable pushdowns.
+// S1 dumbbell shrugs, cable curls and cable pushdowns in S2 and S4.
 
 export interface Cue {
   setup: string;       // how to get into position
@@ -50,6 +50,16 @@ const PULLDOWN: Omit<Cue, "note"> = {
     "Squeeze your back for a second, then let the bar rise until your arms are fully straight.",
   ],
   avoid: "Leaning right back and swinging the weight, or pulling the bar behind your neck.",
+};
+
+const PUSHDOWN: Omit<Cue, "note"> = {
+  setup: "Rope or straight bar on a high cable. Stand tall, elbows pinned to your sides, slight forward lean.",
+  steps: [
+    "Push down until your arms are fully straight.",
+    "Squeeze your triceps at the bottom. With a rope, pull the ends apart.",
+    "Let the handle rise until your forearms pass parallel to the floor, elbows staying put.",
+  ],
+  avoid: "Elbows flaring or drifting forward, or leaning your bodyweight over the handle.",
 };
 
 const CURL_STEPS = [
@@ -190,16 +200,7 @@ export const PLAN: Session[] = [
           note: "Go straight into cable pushdowns, then rest.",
         } },
       { id: "s2_pushdown", key: "pushdown", name: "Cable tricep pushdown", lo: 10, hi: 10, sets: 3, rest: 60, inc: 2.5, kind: "machine", ss: "B",
-        cue: {
-          setup: "Rope or straight bar on a high cable. Stand tall, elbows pinned to your sides, slight forward lean.",
-          steps: [
-            "Push down until your arms are fully straight.",
-            "Squeeze your triceps at the bottom. With a rope, pull the ends apart.",
-            "Let the handle rise until your forearms pass parallel to the floor, elbows staying put.",
-          ],
-          avoid: "Elbows flaring or drifting forward, or leaning your bodyweight over the handle.",
-          note: "Rest once you've done both exercises.",
-        } },
+        cue: { ...PUSHDOWN, note: "Rest once you've done both exercises." } },
     ],
     extra: { title: "Bike sprints", detail: "Assault bike or standard bike. 2 sets of 8 rounds: 20s sprint, 10s rest, with 2 to 3 min between sets.", placeholder: "Notes, e.g. level 12" },
   },
@@ -309,24 +310,15 @@ export const PLAN: Session[] = [
           avoid: SHRUG_AVOID,
           note: "Dumbbell or barbell.",
         } },
-      { id: "s4_curl", key: "curl", name: "Bicep curl", lo: 5, hi: 10, sets: 3, rest: 60, inc: 1, kind: "db", ss: "C",
+      { id: "s4_curl", key: "cablecurl", name: "Cable bicep curl", lo: 5, hi: 10, sets: 3, rest: 60, inc: 2.5, kind: "machine", ss: "C",
         cue: {
-          setup: "Stand tall with dumbbells, a barbell or a cable, elbows tucked at your sides.",
+          setup: "Straight bar or EZ bar on a low cable. Stand close to the stack, elbows tucked against your sides.",
           steps: CURL_STEPS,
           avoid: CURL_AVOID,
-          note: "Dumbbell, barbell or cable. Go straight into skull crushers, then rest.",
+          note: "Go straight into cable pushdowns, then rest.",
         } },
-      { id: "s4_skull", key: "skull", name: "Skull crusher", lo: 10, hi: 12, sets: 3, rest: 60, inc: 2.5, kind: "bar", ss: "C",
-        cue: {
-          setup: "Lie on a flat bench holding an EZ bar over your chest with straight arms.",
-          steps: [
-            "Tilt the bar back slightly so it sits over your forehead.",
-            "Bending only at the elbows, lower it towards your forehead or just behind your head.",
-            "Straighten your arms back to the start, elbows pointing at the ceiling.",
-          ],
-          avoid: "Elbows flaring out wide, or your upper arms swinging back and forth.",
-          note: "An EZ bar is easiest on the wrists. Cable tricep pushdowns are the swap.",
-        } },
+      { id: "s4_pushdown", key: "pushdown", name: "Cable tricep pushdown", lo: 10, hi: 12, sets: 3, rest: 60, inc: 2.5, kind: "machine", ss: "C",
+        cue: { ...PUSHDOWN, note: "Rest once you've done both exercises." } },
     ],
     extra: { title: "Steady bike", detail: "20 to 40 minutes at 130 to 160 bpm.", placeholder: "Minutes and avg HR" },
   },
@@ -335,7 +327,7 @@ export const PLAN: Session[] = [
 export const LIFT_NAMES: Record<string, string> = (() => {
   const m: Record<string, string> = {};
   PLAN.forEach(s => s.ex.forEach(e => { if (!m[e.key]) m[e.key] = e.name; }));
-  m.shrugs = "Shrugs"; m.curl = "Bicep curl"; m.pulldown = "Lat pulldown"; m.dbshrugs = "Dumbbell shrugs";
+  m.shrugs = "Shrugs"; m.pulldown = "Lat pulldown"; m.dbshrugs = "Dumbbell shrugs";
   return m;
 })();
 
