@@ -270,3 +270,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--hot); outli
 .seg.filter { height: 44px; grid-template-columns: repeat(3, 1fr); }
 .seg.filter small { font-weight: 600; color: var(--muted); margin-left: 2px; }
 .xv { font-weight: 700; color: var(--accent); }
+
+.set-actions { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.add.remove { color: #B5412B; }
+@media (prefers-color-scheme: dark) { .add.remove { color: #E68A74; } }

@@ -185,7 +185,7 @@ function exHTML(e: Exercise, day?: DayLog): string {
     <p class="cue" id="cue-${e.id}" hidden>${esc(e.cue)}</p>
     <div class="hint"><span class="last num">${esc(lastTxt)}</span><span class="go ${h.up ? "up" : ""}">${esc(h.text)}</span></div>
     <div class="sets">${rows}</div>
-    <button class="add" data-add="${e.id}">+ Add a set</button></div>`;
+    <div class="set-actions"><button class="add" data-add="${e.id}">+ Add a set</button>${n > e.sets ? `<button class="add remove" data-remove="${e.id}">Remove set ${n}</button>` : ""}</div></div>`;
 }
 
 let openLift: string | null = null;
@@ -344,6 +344,12 @@ train.addEventListener("click", ev => {
   }
   const cue = el.closest<HTMLElement>("[data-cue]");
   if (cue) { const p = $("cue-" + cue.dataset.cue); p.hidden = !p.hidden; cue.setAttribute("aria-expanded", String(!p.hidden)); return; }
+  const rm = el.closest<HTMLElement>("[data-remove]");
+  if (rm) {
+    const e = findExercise(rm.dataset.remove!)!, d = today(), arr = d.ex[e.id] || [];
+    if (arr.length > e.sets) { arr.pop(); save(d.date, true); render(); }
+    return;
+  }
   const add = el.closest<HTMLElement>("[data-add]");
   if (add) { const e = findExercise(add.dataset.add!)!, d = today(); setRow(d, e, Math.max(e.sets, (d.ex[e.id] || []).length)); save(d.date); render(); return; }
   if (el.closest("#extra-tick")) {
