@@ -5,12 +5,15 @@ import "@fontsource/figtree/500";
 import "@fontsource/figtree/600";
 import "@fontsource/figtree/700";
 import "./style.css";
-import { PLAN, WEEK, LIFT_NAMES, findExercise, type Exercise, type Session } from "./plan";
-import { loadAll, put, remove, replaceAll, askPersist, type DayLog, type SetLog } from "./store";
+import { PLAN, WEEK, SESSION_DAY, LIFT_NAMES, findExercise, type Exercise, type Session } from "./plan";
+import { loadAll, put, remove, replaceAll, askPersist, loadGames, putGame, removeGame, replaceGames, type DayLog, type SetLog, type Game } from "./store";
 
 /* ---------------- state ---------------- */
 let days: Record<string, DayLog> = {};
-let view: "train" | "progress" | "backup" = "train";
+let view: "train" | "progress" | "games" | "backup" = "train";
+let games: Game[] = [];
+let gameForm: Game | null = null;   // open form (new or editing)
+let confirmGameDelete = false;
 let pickedSession: number | null = null;
 let confirmClear = false;
 let pendingRender = false;
@@ -40,7 +43,10 @@ function nextSession(): number {
 }
 function activeSession(): number {
   const t = days[todayKey()];
-  return t ? t.session : pickedSession ?? nextSession();
+  if (t) return t.session;
+  if (pickedSession) return pickedSession;
+  const suggested = WEEK[dowMon(new Date())].s;
+  return suggested || nextSession();
 }
 function today(): DayLog {
   const tk = todayKey();
@@ -118,11 +124,11 @@ function renderTrain() {
   const kind = WEEK[dowMon(new Date())].c;
   const banner =
     kind === "rugby" ? `<div class="banner"><b>Rugby tonight.</b> Not a gym day, but you can still log here.</div>` :
-    kind === "game" ? `<div class="banner"><b>Game day.</b> Nothing to lift. Session ${nx} is next.</div>` :
-    kind === "rest" ? `<div class="banner"><b>Rest day.</b> Session ${nx} is up on Monday.</div>` : "";
+    kind === "game" ? `<div class="banner banner-row"><span><b>Game day.</b> Nothing to lift.</span><button class="mini" id="log-game">Log the game</button></div>` :
+    kind === "rest" ? `<div class="banner"><b>Sunday.</b> Session 4 if you've got the legs, otherwise rest.</div>` : "";
 
-  const chips = PLAN.map(p => `<button class="chip" data-pick="${p.n}" aria-pressed="${p.n === n}">
-      <b>${p.n}</b><small class="${p.n === nx && p.n !== n ? "next" : ""}">${p.n === nx ? "Up next" : esc(p.focus.split(",")[0])}</small></button>`).join("");
+  const chips = PLAN.map(p => `<button class="chip ${p.n === nx && p.n !== n ? "is-next" : ""}" data-pick="${p.n}" aria-pressed="${p.n === n}" aria-label="Session ${p.n}, ${SESSION_DAY[p.n]}${p.n === nx ? ", up next in the rotation" : ""}">
+      <b>S${p.n}</b><small>${SESSION_DAY[p.n]}</small></button>`).join("");
 
   const groups: { ss?: string; items: Exercise[] }[] = [];
   s.ex.forEach(e => {
@@ -253,7 +259,7 @@ function renderBackup() {
   const n = sortedDates().filter(d => setsDone(days[d]) > 0).length;
   $("backup").innerHTML = `
     <div class="title"><h1>Backup</h1><p>Your log lives only on this phone. Save a copy every couple of weeks.</p></div>
-    <div class="panel"><h2>Save a backup</h2><p>${n} session${n === 1 ? "" : "s"} logged. Save the file to iCloud Drive or Files.</p>
+    <div class="panel"><h2>Save a backup</h2><p>${n} session${n === 1 ? "" : "s"} and ${games.length} game${games.length === 1 ? "" : "s"} logged. Save the file to iCloud Drive or Files.</p>
       <button class="btn" id="export">Save backup file</button></div>
     <div class="panel"><h2>Restore</h2><p>Replaces everything on this phone with the backup you pick.</p>
       <label class="btn alt btn-file">Choose backup file<input type="file" id="import" accept="application/json,.json"></label></div>
@@ -265,8 +271,9 @@ function render() {
   $("train").hidden = view !== "train";
   $("progress").hidden = view !== "progress";
   $("backup").hidden = view !== "backup";
+  $("games").hidden = view !== "games";
   document.querySelectorAll<HTMLButtonElement>(".tabs button").forEach(b => b.setAttribute("aria-selected", String(b.dataset.view === view)));
-  if (view === "train") renderTrain(); else if (view === "progress") renderProgress(); else renderBackup();
+  if (view === "train") renderTrain(); else if (view === "progress") renderProgress(); else if (view === "games") renderGames(); else renderBackup();
 }
 function requestRender() {
   const a = document.activeElement;
@@ -307,6 +314,7 @@ train.addEventListener("click", ev => {
     const d = today(); d.extra.done = !d.extra.done; $("extra").classList.toggle("done", d.extra.done);
     if (d.extra.done) buzz(); save(d.date, true); return;
   }
+  if (el.closest("#log-game")) { view = "games"; gameForm = newGame(); render(); window.scrollTo({ top: 0 }); return; }
   if (el.closest("#clear")) { confirmClear = true; render(); return; }
   if (el.closest("#clear-no")) { confirmClear = false; render(); return; }
   if (el.closest("#clear-yes")) { const k = todayKey(); delete days[k]; confirmClear = false; save(k, true); render(); toast("Today cleared"); return; }
@@ -406,7 +414,7 @@ function toast(msg: string) {
 /* ---------------- backup ---------------- */
 $("backup").addEventListener("click", ev => {
   if (!(ev.target as HTMLElement).closest("#export")) return;
-  const data = { app: "gymplan", version: 1, exported: new Date().toISOString(), days: Object.values(days).filter(d => setsDone(d) > 0 || d.extra.note) };
+  const data = { app: "gymplan", version: 1, exported: new Date().toISOString(), days: Object.values(days).filter(d => setsDone(d) > 0 || d.extra.note), games };
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
   const name = `gymplan-backup-${todayKey()}.json`;
   const file = new File([blob], name, { type: "application/json" });
@@ -426,14 +434,142 @@ $("backup").addEventListener("change", async ev => {
     const list: DayLog[] = parsed.days.filter((d: DayLog) => d && d.date && d.session >= 1 && d.session <= 4);
     await replaceAll(list);
     days = {}; list.forEach(d => { days[d.date] = d; });
-    toast(`Restored ${list.length} days`); render();
+    const g: Game[] = Array.isArray(parsed.games) ? parsed.games.filter((x: Game) => x && x.id && x.date) : [];
+    await replaceGames(g); games = g;
+    toast(`Restored ${list.length} sessions and ${g.length} games`); render();
   } catch { toast("That file isn't a gymplan backup"); }
   input.value = "";
 });
 
+/* ---------------- games ---------------- */
+function lastSaturday(): string {
+  const d = new Date(); const back = (dowMon(d) - 5 + 7) % 7; d.setDate(d.getDate() - back); return keyOf(d);
+}
+function newGame(): Game {
+  return { id: "g" + Date.now().toString(36), date: lastSaturday(), opponent: "", venue: "home", us: null, them: null, mins: null, tries: 0, points: 0, updated: 0 };
+}
+function result(g: Game): "W" | "L" | "D" | "" {
+  if (g.us == null || g.them == null) return "";
+  return g.us > g.them ? "W" : g.us < g.them ? "L" : "D";
+}
+const sortedGames = () => games.slice().sort((a, b) => b.date.localeCompare(a.date) || b.updated - a.updated);
+
+function renderGames() {
+  const played = games.length;
+  const w = games.filter(g => result(g) === "W").length, l = games.filter(g => result(g) === "L").length, d = games.filter(g => result(g) === "D").length;
+  const tries = games.reduce((a, g) => a + (g.tries || 0), 0);
+  const pts = games.reduce((a, g) => a + (g.points || 0), 0);
+  const withMins = games.filter(g => g.mins != null);
+  const mins = withMins.reduce((a, g) => a + (g.mins || 0), 0);
+
+  const form = gameForm ? gameFormHTML(gameForm) : `<button class="btn" id="game-new">Log a game</button>`;
+
+  const list = sortedGames().map(g => {
+    const r = result(g);
+    const label = new Date(g.date + "T12:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short" });
+    const mine = [g.mins != null ? `${g.mins} mins` : "", g.tries ? `${g.tries} ${g.tries === 1 ? "try" : "tries"}` : "", g.points ? `${g.points} pts` : ""].filter(Boolean).join(" · ") || "No personal stats";
+    return `<button class="gamerow" data-game="${g.id}">
+      <span class="res ${r.toLowerCase()}">${r || "?"}</span>
+      <span class="g-main"><b>${g.venue === "away" ? "at " : "v "}${esc(g.opponent || "Opponent")}</b><small>${label} · ${esc(mine)}</small></span>
+      <span class="score num">${g.us ?? "?"}<i>-</i>${g.them ?? "?"}</span></button>`;
+  }).join("");
+
+  $("games").innerHTML = `
+    <div class="title"><h1>Games</h1><p>Match days, minutes and points.</p></div>
+    <div class="stats">
+      <div class="stat"><span>Record</span><b class="num">${w}-${d}-${l}</b><em>W · D · L</em></div>
+      <div class="stat"><span>Your points</span><b class="num">${pts}</b><em>${tries} ${tries === 1 ? "try" : "tries"}</em></div>
+      <div class="stat"><span>Minutes</span><b class="num">${mins}</b><em>${withMins.length ? Math.round(mins / withMins.length) + " avg" : "per game"}</em></div>
+    </div>
+    ${form}
+    <h2 class="sec">Season${played ? ` · ${played} played` : ""}</h2>
+    <section class="card">${list || `<div class="empty">No games yet. Log your first one after Saturday.</div>`}</section>`;
+}
+
+function gameFormHTML(g: Game): string {
+  const editing = games.some(x => x.id === g.id);
+  const opps = Array.from(new Set(games.map(x => x.opponent).filter(Boolean))).sort();
+  return `<form class="panel gform" id="game-form" autocomplete="off">
+    <h2>${editing ? "Edit game" : "Log a game"}</h2>
+    <div class="grid2">
+      <label class="lab">Date<input type="date" id="g-date" value="${g.date}" required></label>
+      <div class="lab">Venue<div class="seg" role="group">
+        <button type="button" data-venue="home" aria-pressed="${g.venue === "home"}">Home</button>
+        <button type="button" data-venue="away" aria-pressed="${g.venue === "away"}">Away</button></div></div>
+    </div>
+    <label class="lab">Opponent<input type="text" id="g-opp" list="opp-list" value="${esc(g.opponent)}" placeholder="e.g. Tabard" enterkeyhint="next" required></label>
+    <datalist id="opp-list">${opps.map(o => `<option value="${esc(o)}">`).join("")}</datalist>
+    <div class="lab">Score<div class="scoreline">
+      <label class="field"><input type="number" inputmode="numeric" id="g-us" value="${g.us ?? ""}" placeholder="0" aria-label="Our score"><em>Us</em></label>
+      <span class="vs">v</span>
+      <label class="field"><input type="number" inputmode="numeric" id="g-them" value="${g.them ?? ""}" placeholder="0" aria-label="Their score"><em>Them</em></label>
+    </div></div>
+    <div class="grid3">
+      <label class="lab">Mins played<span class="field"><input type="number" inputmode="numeric" id="g-mins" value="${g.mins ?? ""}" placeholder="80"><em>min</em></span></label>
+      <div class="lab">Tries<div class="stepper">
+        <button type="button" data-step="-1" aria-label="One less try">−</button>
+        <b class="num" id="g-tries">${g.tries}</b>
+        <button type="button" data-step="1" aria-label="One more try">+</button></div></div>
+      <label class="lab">Your points<span class="field"><input type="number" inputmode="numeric" id="g-pts" value="${g.points || ""}" placeholder="${g.tries * 5}"><em>pts</em></span></label>
+    </div>
+    <div class="form-actions">
+      <button type="submit" class="btn">Save game</button>
+      <button type="button" class="btn alt" id="game-cancel">Cancel</button>
+    </div>
+    ${editing ? (confirmGameDelete
+      ? `<div class="confirm">Delete this game? <button type="button" class="danger" id="game-del-yes">Delete</button><button type="button" id="game-del-no">Keep</button></div>`
+      : `<button type="button" class="link" id="game-del">Delete game</button>`) : ""}
+  </form>`;
+}
+
+function readForm(): void {
+  if (!gameForm) return;
+  const num = (id: string) => { const v = ($(id) as HTMLInputElement).value; return v === "" ? null : Math.max(0, Math.round(+v)); };
+  gameForm.date = ($("g-date") as HTMLInputElement).value || gameForm.date;
+  gameForm.opponent = ($("g-opp") as HTMLInputElement).value.trim();
+  gameForm.us = num("g-us"); gameForm.them = num("g-them"); gameForm.mins = num("g-mins");
+  const p = num("g-pts"); gameForm.points = p ?? gameForm.tries * 5;
+}
+
+const gamesEl = $("games");
+gamesEl.addEventListener("click", ev => {
+  const el = ev.target as HTMLElement;
+  if (el.closest("#game-new")) { gameForm = newGame(); confirmGameDelete = false; render(); $("g-opp").focus(); return; }
+  const row = el.closest<HTMLElement>("[data-game]");
+  if (row) { const g = games.find(x => x.id === row.dataset.game); if (g) { gameForm = { ...g }; confirmGameDelete = false; render(); window.scrollTo({ top: 0, behavior: "smooth" }); } return; }
+  if (!gameForm) return;
+  const v = el.closest<HTMLElement>("[data-venue]");
+  if (v) { readForm(); gameForm.venue = v.dataset.venue as Game["venue"]; render(); return; }
+  const st = el.closest<HTMLElement>("[data-step]");
+  if (st) {
+    readForm();
+    const hadAuto = ($("g-pts") as HTMLInputElement).value === "" || gameForm.points === gameForm.tries * 5;
+    gameForm.tries = Math.max(0, gameForm.tries + +st.dataset.step!);
+    if (hadAuto) gameForm.points = gameForm.tries * 5;
+    render(); return;
+  }
+  if (el.closest("#game-cancel")) { gameForm = null; confirmGameDelete = false; render(); return; }
+  if (el.closest("#game-del")) { readForm(); confirmGameDelete = true; render(); return; }
+  if (el.closest("#game-del-no")) { readForm(); confirmGameDelete = false; render(); return; }
+  if (el.closest("#game-del-yes")) {
+    const id = gameForm.id; games = games.filter(g => g.id !== id); gameForm = null; confirmGameDelete = false;
+    removeGame(id).catch(() => toast("Couldn't delete. Try again.")); render(); toast("Game deleted"); return;
+  }
+});
+gamesEl.addEventListener("submit", ev => {
+  ev.preventDefault();
+  if (!gameForm) return;
+  readForm();
+  if (!gameForm.opponent) { toast("Add the opponent"); $("g-opp").focus(); return; }
+  const g = gameForm, i = games.findIndex(x => x.id === g.id);
+  if (i >= 0) games[i] = g; else games.push(g);
+  putGame(g).then(() => toast(result(g) === "W" ? "Win logged" : "Game logged")).catch(() => toast("Couldn't save. Try again."));
+  gameForm = null; buzz(); render();
+});
+
 /* ---------------- tabs & boot ---------------- */
 document.querySelectorAll<HTMLButtonElement>(".tabs button").forEach(b => b.addEventListener("click", () => {
-  view = b.dataset.view as typeof view; confirmClear = false; render(); window.scrollTo({ top: 0 });
+  view = b.dataset.view as typeof view; confirmClear = false; gameForm = null; confirmGameDelete = false; render(); window.scrollTo({ top: 0 });
 }));
 
 // Roll over to a new day if the app is left open overnight.
@@ -441,7 +577,7 @@ let shownDay = todayKey();
 setInterval(() => { if (todayKey() !== shownDay) { shownDay = todayKey(); pickedSession = null; requestRender(); } }, 60000);
 
 (async () => {
-  try { days = await loadAll(); } catch { toast("Storage unavailable. Logs won't save."); }
+  try { days = await loadAll(); games = await loadGames(); } catch { toast("Storage unavailable. Logs won't save."); }
   render();
   askPersist();
 })();

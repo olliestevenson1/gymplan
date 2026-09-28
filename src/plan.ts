@@ -110,15 +110,18 @@ export const LIFT_NAMES: Record<string, string> = (() => {
 })();
 
 // Monday first
+// s = the session suggested for that day
 export const WEEK = [
-  { d: "M", t: "Gym", c: "gym" },
-  { d: "T", t: "Rugby", c: "rugby" },
-  { d: "W", t: "Gym", c: "gym" },
-  { d: "T", t: "Rugby", c: "rugby" },
-  { d: "F", t: "Gym", c: "gym" },
-  { d: "S", t: "Game", c: "game" },
-  { d: "S", t: "Rest", c: "rest" },
+  { d: "M", t: "S1", c: "gym", s: 1 },
+  { d: "T", t: "Rugby", c: "rugby", s: 0 },
+  { d: "W", t: "S2", c: "gym", s: 2 },
+  { d: "T", t: "Rugby", c: "rugby", s: 0 },
+  { d: "F", t: "S3", c: "gym", s: 3 },
+  { d: "S", t: "Game", c: "game", s: 0 },
+  { d: "S", t: "S4/Rest", c: "rest", s: 4 },
 ] as const;
+
+export const SESSION_DAY: Record<number, string> = { 1: "Mon", 2: "Wed", 3: "Fri", 4: "Sun" };
 
 export function findExercise(id: string): Exercise | undefined {
   for (const s of PLAN) for (const e of s.ex) if (e.id === id) return e;
