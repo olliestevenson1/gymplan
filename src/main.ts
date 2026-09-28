@@ -15,6 +15,7 @@ let view: "train" | "progress" | "games" | "backup" = "train";
 let games: Game[] = [];
 let gameForm: Game | null = null;   // open form (new or editing)
 let confirmGameDelete = false;
+let teamFilter: "all" | "1st" | "2nd" = "all";
 let pickedSession: number | null = null;
 let confirmClear = false;
 let pendingRender = false;
@@ -490,7 +491,8 @@ function lastSaturday(): string {
   const d = new Date(); const back = (dowMon(d) - 5 + 7) % 7; d.setDate(d.getDate() - back); return keyOf(d);
 }
 function newGame(): Game {
-  return { id: "g" + Date.now().toString(36), date: lastSaturday(), opponent: "", venue: "home", us: null, them: null, mins: null, tries: 0, points: 0, updated: 0 };
+  const lastTeam = sortedGames()[0]?.team ?? "1st";
+  return { id: "g" + Date.now().toString(36), date: lastSaturday(), opponent: "", venue: "home", team: lastTeam, us: null, them: null, mins: null, tries: 0, points: 0, updated: 0 };
 }
 function result(g: Game): "W" | "L" | "D" | "" {
   if (g.us == null || g.them == null) return "";
@@ -498,7 +500,21 @@ function result(g: Game): "W" | "L" | "D" | "" {
 }
 const sortedGames = () => games.slice().sort((a, b) => b.date.localeCompare(a.date) || b.updated - a.updated);
 
+const teamOf = (g: Game) => g.team ?? "1st";
+const teamLabel = (t: string) => (t === "2nd" ? "2nd XV" : "1st XV");
+
 function renderGames() {
+  const all = games;
+  const hasBoth = all.some(g => teamOf(g) === "1st") && all.some(g => teamOf(g) === "2nd");
+  if (!hasBoth) teamFilter = "all";
+  const games_ = teamFilter === "all" ? all : all.filter(g => teamOf(g) === teamFilter);
+  const filterBar = hasBoth ? `<div class="seg filter" role="group" aria-label="Show games for">
+      ${(["all", "1st", "2nd"] as const).map(t => `<button type="button" data-team-filter="${t}" aria-pressed="${teamFilter === t}">${t === "all" ? "Both" : teamLabel(t)}${t === "all" ? "" : ` <small>${all.filter(g => teamOf(g) === t).length}</small>`}</button>`).join("")}
+    </div>` : "";
+  return renderGamesFor(games_, filterBar);
+}
+
+function renderGamesFor(games: Game[], filterBar: string) {
   const played = games.length;
   const w = games.filter(g => result(g) === "W").length, l = games.filter(g => result(g) === "L").length, d = games.filter(g => result(g) === "D").length;
   const tries = games.reduce((a, g) => a + (g.tries || 0), 0);
@@ -508,10 +524,11 @@ function renderGames() {
 
   const form = gameForm ? gameFormHTML(gameForm) : `<button class="btn" id="game-new">Log a game</button>`;
 
-  const recentGames = sortedGames().slice(0, 10).reverse();
+  const sorted = games.slice().sort((a, b) => b.date.localeCompare(a.date) || b.updated - a.updated);
+  const recentGames = sorted.slice(0, 10).reverse();
   const abbr = (o: string) => (o || "?").replace(/[^A-Za-z0-9 ]/g, "").split(/\s+/).filter(Boolean).map(w => w[0]).join("").slice(0, 3).toUpperCase() || "?";
   const lab = (g: Game) => (g.opponent.trim().includes(" ") ? abbr(g.opponent) : g.opponent.slice(0, 4));
-  const vsTxt = (g: Game) => `${g.venue === "away" ? "at" : "v"} ${g.opponent}`;
+  const vsTxt = (g: Game) => `${teamLabel(teamOf(g))} ${g.venue === "away" ? "at" : "v"} ${g.opponent}`;
   const charts = recentGames.length ? `
     <h2 class="sec">Your points per game</h2>
     <section class="card pad">${barChart("c-points", recentGames.map(g => ({
@@ -524,18 +541,19 @@ function renderGames() {
       tip: `${shortDate(g.date)} ${vsTxt(g)}: ${g.mins ?? "no"} mins, ${g.us ?? "?"}-${g.them ?? "?"}`,
     })), { ref: { value: 80, label: "Full 80" }, readout: `Last ${recentGames.length} game${recentGames.length === 1 ? "" : "s"}, tap a bar for details` })}</section>` : "";
 
-  const list = sortedGames().map(g => {
+  const list = sorted.map(g => {
     const r = result(g);
     const label = new Date(g.date + "T12:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short" });
     const mine = [g.mins != null ? `${g.mins} mins` : "", g.tries ? `${g.tries} ${g.tries === 1 ? "try" : "tries"}` : "", g.points ? `${g.points} pts` : ""].filter(Boolean).join(" · ") || "No personal stats";
     return `<button class="gamerow" data-game="${g.id}">
       <span class="res ${r.toLowerCase()}">${r || "?"}</span>
-      <span class="g-main"><b>${g.venue === "away" ? "at " : "v "}${esc(g.opponent || "Opponent")}</b><small>${label} · ${esc(mine)}</small></span>
+      <span class="g-main"><b>${g.venue === "away" ? "at " : "v "}${esc(g.opponent || "Opponent")}</b><small>${label} · <span class="xv">${teamLabel(teamOf(g))}</span> · ${esc(mine)}</small></span>
       <span class="score num">${g.us ?? "?"}<i>-</i>${g.them ?? "?"}</span></button>`;
   }).join("");
 
   $("games").innerHTML = `
     <div class="title"><h1>Games</h1><p>Match days, minutes and points.</p></div>
+    ${filterBar}
     <div class="stats">
       <div class="stat"><span>Record</span><b class="num">${w}-${d}-${l}</b><em>W · D · L</em></div>
       <div class="stat"><span>Your points</span><b class="num">${pts}</b><em>${tries} ${tries === 1 ? "try" : "tries"}</em></div>
@@ -543,7 +561,7 @@ function renderGames() {
     </div>
     ${form}
     ${charts}
-    <h2 class="sec">Season${played ? ` · ${played} played` : ""}</h2>
+    <h2 class="sec">${teamFilter === "all" ? "Season" : teamLabel(teamFilter)}${played ? ` · ${played} played` : ""}</h2>
     <section class="card">${list || `<div class="empty">No games yet. Log your first one after Saturday.</div>`}</section>`;
 }
 
@@ -558,6 +576,9 @@ function gameFormHTML(g: Game): string {
         <button type="button" data-venue="home" aria-pressed="${g.venue === "home"}">Home</button>
         <button type="button" data-venue="away" aria-pressed="${g.venue === "away"}">Away</button></div></div>
     </div>
+    <div class="lab">Team<div class="seg" role="group">
+      <button type="button" data-team="1st" aria-pressed="${teamOf(g) === "1st"}">1st XV</button>
+      <button type="button" data-team="2nd" aria-pressed="${teamOf(g) === "2nd"}">2nd XV</button></div></div>
     <label class="lab">Opponent<input type="text" id="g-opp" list="opp-list" value="${esc(g.opponent)}" placeholder="e.g. Tabard" enterkeyhint="next" required></label>
     <datalist id="opp-list">${opps.map(o => `<option value="${esc(o)}">`).join("")}</datalist>
     <div class="lab">Score<div class="scoreline">
@@ -598,7 +619,11 @@ gamesEl.addEventListener("click", ev => {
   if (el.closest("#game-new")) { gameForm = newGame(); confirmGameDelete = false; render(); $("g-opp").focus(); return; }
   const row = el.closest<HTMLElement>("[data-game]");
   if (row) { const g = games.find(x => x.id === row.dataset.game); if (g) { gameForm = { ...g }; confirmGameDelete = false; render(); window.scrollTo({ top: 0, behavior: "smooth" }); } return; }
+  const tf = el.closest<HTMLElement>("[data-team-filter]");
+  if (tf) { if (gameForm) readForm(); teamFilter = tf.dataset.teamFilter as typeof teamFilter; render(); return; }
   if (!gameForm) return;
+  const tm = el.closest<HTMLElement>("[data-team]");
+  if (tm) { readForm(); gameForm.team = tm.dataset.team as "1st" | "2nd"; render(); return; }
   const v = el.closest<HTMLElement>("[data-venue]");
   if (v) { readForm(); gameForm.venue = v.dataset.venue as Game["venue"]; render(); return; }
   const st = el.closest<HTMLElement>("[data-step]");

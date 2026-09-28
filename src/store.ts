@@ -14,6 +14,7 @@ export interface Game {
   date: string;          // YYYY-MM-DD
   opponent: string;
   venue: "home" | "away";
+  team?: "1st" | "2nd";  // which XV
   us: number | null;     // our score
   them: number | null;   // their score
   mins: number | null;   // minutes played

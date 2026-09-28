@@ -265,3 +265,8 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--hot); outli
 .lift + .lift { border-top: 0; }
 .lift-wrap.open .lift svg { opacity: .35; }
 .lift-detail { padding: 0 12px 12px; }
+
+/* 1st / 2nd XV */
+.seg.filter { height: 44px; grid-template-columns: repeat(3, 1fr); }
+.seg.filter small { font-weight: 600; color: var(--muted); margin-left: 2px; }
+.xv { font-weight: 700; color: var(--accent); }
