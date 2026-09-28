@@ -194,7 +194,12 @@ function exHTML(e: Exercise, day?: DayLog): string {
   return `<div class="ex">
     <div class="ex-top"><div><h2>${esc(e.name)}</h2><div class="rx">${esc(e.setsTxt ?? e.sets + " sets")} · ${esc(repsTxt(e))} · rest ${restTxt(e.rest)}</div></div>
       <button class="cue-btn" data-cue="${e.id}" aria-expanded="false">Cues</button></div>
-    <p class="cue" id="cue-${e.id}" hidden>${esc(e.cue)}</p>
+    <div class="cue" id="cue-${e.id}" hidden>
+      <p><b>Set up</b>${esc(e.cue.setup)}</p>
+      <ol>${e.cue.steps.map(t => `<li>${esc(t)}</li>`).join("")}</ol>
+      <p><b>Avoid</b>${esc(e.cue.avoid)}</p>
+      ${e.cue.note ? `<p class="hhf"><b>HHF</b>${esc(e.cue.note)}</p>` : ""}
+    </div>
     <div class="hint"><span class="last num">${esc(lastTxt)}</span><span class="go ${h.up ? "up" : ""}">${esc(h.text)}</span></div>
     <div class="sets">${rows}</div>
     <div class="set-actions"><button class="add" data-add="${e.id}">+ Add a set</button>${n > e.sets ? `<button class="add remove" data-remove="${e.id}">Remove set ${n}</button>` : ""}</div></div>`;
