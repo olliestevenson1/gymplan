@@ -6,6 +6,7 @@ import "@fontsource/figtree/600";
 import "@fontsource/figtree/700";
 import "./style.css";
 import { PLAN, WEEK, SESSION_DAY, LIFT_NAMES, findExercise, type Exercise, type Session } from "./plan";
+import { barChart, lineChart, wireCharts } from "./charts";
 import { loadAll, put, remove, replaceAll, askPersist, loadGames, putGame, removeGame, replaceGames, type DayLog, type SetLog, type Game } from "./store";
 
 /* ---------------- state ---------------- */
@@ -186,37 +187,67 @@ function exHTML(e: Exercise, day?: DayLog): string {
     <button class="add" data-add="${e.id}">+ Add a set</button></div>`;
 }
 
+let openLift: string | null = null;
+
+function weekStart(d: Date): Date { const x = new Date(d); x.setHours(12, 0, 0, 0); x.setDate(x.getDate() - dowMon(x)); return x; }
+const shortDate = (k: string) => new Date(k + "T12:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short" });
+
 function renderProgress() {
   const dates = sortedDates().filter(d => setsDone(days[d]) > 0);
   const cut = new Date(); cut.setDate(cut.getDate() - 27);
   const recent = dates.filter(d => d >= keyOf(cut));
-  let vol = 0;
-  recent.forEach(d => Object.values(days[d].ex).forEach(a => a.forEach(s => { if (s.done) vol += (s.kg ?? 0) * (s.reps ?? 0); })));
+  const dayVol = (d: string) => Object.values(days[d].ex).reduce((a, arr) => a + arr.reduce((b, st) => b + (st.done ? (st.kg ?? 0) * (st.reps ?? 0) : 0), 0), 0);
+  const vol = recent.reduce((a, d) => a + dayVol(d), 0);
 
-  type Pt = { v: number };
-  const lifts: Record<string, { pts: Pt[]; best: { kg: number; reps: number; e1: number } | null }> = {};
+  // last 8 training weeks, Monday to Sunday
+  const thisWeek = weekStart(new Date());
+  const weeks = Array.from({ length: 8 }, (_, i) => { const w = new Date(thisWeek); w.setDate(w.getDate() - 7 * (7 - i)); return w; });
+  const wk = weeks.map(w => {
+    const from = keyOf(w), toD = new Date(w); toD.setDate(toD.getDate() + 6); const to = keyOf(toD);
+    const inWeek = dates.filter(d => d >= from && d <= to);
+    return { from, n: inWeek.length, vol: inWeek.reduce((a, d) => a + dayVol(d), 0) };
+  });
+  const sessionsChart = barChart("c-sessions", wk.map((w, i) => ({
+    value: w.n, label: shortDate(w.from).replace(" ", " "), hot: i === 7,
+    tip: `Week of ${shortDate(w.from)}: ${w.n} session${w.n === 1 ? "" : "s"}`,
+  })), { ref: { value: 3, label: "Target 3" }, min: 3, int: true, readout: `This week: ${wk[7].n} of 3 sessions` });
+  const volChart = barChart("c-volume", wk.map((w, i) => ({
+    value: w.vol, label: shortDate(w.from).replace(" ", " "), hot: i === 7,
+    tip: `Week of ${shortDate(w.from)}: ${Math.round(w.vol).toLocaleString("en-GB")}kg lifted`,
+  })), { readout: `This week: ${Math.round(wk[7].vol).toLocaleString("en-GB")}kg lifted` });
+
+  // per lift history, oldest first
+  type LP = { d: string; top: number; reps: number };
+  const lifts: Record<string, { pts: LP[]; best: { kg: number; reps: number; e1: number } | null }> = {};
   dates.slice().reverse().forEach(d => {
     const day = days[d];
     plan(day.session).ex.forEach(e => {
-      const sets = (day.ex[e.id] || []).filter(s => s.done && (s.reps ?? 0) > 0);
+      const sets = (day.ex[e.id] || []).filter(st => st.done && (st.reps ?? 0) > 0);
       if (!sets.length) return;
       const L = lifts[e.key] || (lifts[e.key] = { pts: [], best: null });
-      const top = Math.max(0, ...sets.map(s => s.kg ?? 0));
-      const topReps = Math.max(...sets.filter(s => (s.kg ?? 0) === top).map(s => s.reps ?? 0));
-      L.pts.push({ v: top > 0 ? top : topReps });
-      sets.forEach(s => {
-        const e1 = (s.kg ?? 0) * (1 + (s.reps ?? 0) / 30);
-        if (!L.best || e1 > L.best.e1 || (!e1 && !L.best.e1 && (s.reps ?? 0) > L.best.reps)) L.best = { kg: s.kg ?? 0, reps: s.reps ?? 0, e1 };
+      const top = Math.max(0, ...sets.map(st => st.kg ?? 0));
+      const reps = Math.max(...sets.filter(st => (st.kg ?? 0) === top).map(st => st.reps ?? 0));
+      L.pts.push({ d, top, reps });
+      sets.forEach(st => {
+        const e1 = (st.kg ?? 0) * (1 + (st.reps ?? 0) / 30);
+        if (!L.best || e1 > L.best.e1 || (!e1 && !L.best.e1 && (st.reps ?? 0) > L.best.reps)) L.best = { kg: st.kg ?? 0, reps: st.reps ?? 0, e1 };
       });
     });
   });
 
   const liftRows = Object.entries(lifts).sort((a, b) => LIFT_NAMES[a[0]].localeCompare(LIFT_NAMES[b[0]])).map(([k, L]) => {
-    const b = L.best!, weighted = b.e1 > 0, n = L.pts.length;
-    return `<div class="lift"><h3>${esc(LIFT_NAMES[k])}</h3>
+    const b = L.best!, weighted = b.e1 > 0, n = L.pts.length, open = openLift === k;
+    const vs = L.pts.map(p => (weighted ? p.top : p.reps));
+    const first = L.pts[0], last = L.pts[n - 1];
+    const change = weighted && n > 1 ? last.top - first.top : 0;
+    const detail = open ? `<div class="lift-detail">${lineChart("c-lift-" + k, L.pts.map(p => ({
+        x: new Date(p.d + "T12:00:00").getTime(), y: weighted ? p.top : p.reps, label: shortDate(p.d),
+        tip: weighted ? `${shortDate(p.d)}: ${kg(p.top)}kg × ${p.reps}` : `${shortDate(p.d)}: ${p.reps} reps`,
+      })), { readout: weighted ? `Top set each session${n > 1 ? `, ${change >= 0 ? "up" : "down"} ${kg(Math.abs(change))}kg since ${shortDate(first.d)}` : ""}` : "Best reps each session" })}</div>` : "";
+    return `<div class="lift-wrap ${open ? "open" : ""}"><button class="lift" data-lift="${k}" aria-expanded="${open}"><h3>${esc(LIFT_NAMES[k])}</h3>
       <span class="pr num">${weighted ? `Best ${kg(b.kg)}kg × ${b.reps}` : `Best ${b.reps} reps`}</span>
       <span class="meta">${weighted ? `Est. max ${Math.round(b.e1)}kg · ` : ""}${n} session${n > 1 ? "s" : ""}</span>
-      ${spark(L.pts.map(p => p.v), weighted ? "kg" : "")}</div>`;
+      ${spark(vs, weighted ? "kg" : "")}</button>${detail}</div>`;
   }).join("");
 
   const hist = dates.slice(0, 12).map(d => {
@@ -232,7 +263,11 @@ function renderProgress() {
       <div class="stat"><span>Volume</span><b class="num">${vol >= 1000 ? (vol / 1000).toFixed(1) + "t" : Math.round(vol) + "kg"}</b></div>
       <div class="stat"><span>All time</span><b class="num">${dates.length}</b></div>
     </div>
-    <h2 class="sec">Lifts</h2>
+    <h2 class="sec">Sessions per week</h2>
+    <section class="card pad">${sessionsChart}</section>
+    <h2 class="sec">Weight lifted per week</h2>
+    <section class="card pad">${volChart}</section>
+    <h2 class="sec">Lifts <span class="sec-hint">tap for the full chart</span></h2>
     <section class="card">${liftRows || `<div class="empty">Log a session and every lift gets a best set and a trend line here.</div>`}</section>
     <h2 class="sec">Recent sessions</h2>
     <section class="card">${hist || `<div class="empty">No sessions yet.</div>`}</section>`;
@@ -441,6 +476,15 @@ $("backup").addEventListener("change", async ev => {
   input.value = "";
 });
 
+$("progress").addEventListener("click", ev => {
+  const b = (ev.target as HTMLElement).closest<HTMLElement>("[data-lift]");
+  if (!b) return;
+  openLift = openLift === b.dataset.lift ? null : b.dataset.lift!;
+  renderProgress();
+});
+wireCharts($("progress"));
+wireCharts($("games"));
+
 /* ---------------- games ---------------- */
 function lastSaturday(): string {
   const d = new Date(); const back = (dowMon(d) - 5 + 7) % 7; d.setDate(d.getDate() - back); return keyOf(d);
@@ -464,6 +508,22 @@ function renderGames() {
 
   const form = gameForm ? gameFormHTML(gameForm) : `<button class="btn" id="game-new">Log a game</button>`;
 
+  const recentGames = sortedGames().slice(0, 10).reverse();
+  const abbr = (o: string) => (o || "?").replace(/[^A-Za-z0-9 ]/g, "").split(/\s+/).filter(Boolean).map(w => w[0]).join("").slice(0, 3).toUpperCase() || "?";
+  const lab = (g: Game) => (g.opponent.trim().includes(" ") ? abbr(g.opponent) : g.opponent.slice(0, 4));
+  const vsTxt = (g: Game) => `${g.venue === "away" ? "at" : "v"} ${g.opponent}`;
+  const charts = recentGames.length ? `
+    <h2 class="sec">Your points per game</h2>
+    <section class="card pad">${barChart("c-points", recentGames.map(g => ({
+      value: g.points || 0, label: lab(g), sub: result(g) || "?", hot: (g.tries || 0) > 0,
+      tip: `${shortDate(g.date)} ${vsTxt(g)}: ${g.points || 0} pts${g.tries ? `, ${g.tries} ${g.tries === 1 ? "try" : "tries"}` : ""}`,
+    })), { min: 5, readout: "Gold bars are games you scored a try" })}</section>
+    <h2 class="sec">Minutes played</h2>
+    <section class="card pad">${barChart("c-mins", recentGames.map(g => ({
+      value: g.mins ?? 0, label: lab(g), sub: result(g) || "?",
+      tip: `${shortDate(g.date)} ${vsTxt(g)}: ${g.mins ?? "no"} mins, ${g.us ?? "?"}-${g.them ?? "?"}`,
+    })), { ref: { value: 80, label: "Full 80" }, readout: `Last ${recentGames.length} game${recentGames.length === 1 ? "" : "s"}, tap a bar for details` })}</section>` : "";
+
   const list = sortedGames().map(g => {
     const r = result(g);
     const label = new Date(g.date + "T12:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short" });
@@ -482,6 +542,7 @@ function renderGames() {
       <div class="stat"><span>Minutes</span><b class="num">${mins}</b><em>${withMins.length ? Math.round(mins / withMins.length) + " avg" : "per game"}</em></div>
     </div>
     ${form}
+    ${charts}
     <h2 class="sec">Season${played ? ` · ${played} played` : ""}</h2>
     <section class="card">${list || `<div class="empty">No games yet. Log your first one after Saturday.</div>`}</section>`;
 }
