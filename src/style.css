@@ -20,6 +20,9 @@
   --bar: var(--navy);
   --on-bar: #FFFFFF;
   --remove: #B5412B;
+  --win: #2F8F5B;
+  --draw: #E08A1E;
+  --loss: #C8412E;
   --seg-on: #FFFFFF;
 
   --display: "Big Shoulders Display", "Arial Narrow", Impact, sans-serif;
@@ -43,6 +46,12 @@
     --bar: #1B2F52;
     --on-bar: #FFFFFF;
     --remove: #E68A74;
+  --win: #4CB27B;
+  --draw: #F0A040;
+  --loss: #E5674F;
+    --win: #4CB27B;
+    --draw: #F0A040;
+    --loss: #E5674F;
   --seg-on: #2C4876;
     --seg-on: #2C4876;
     color-scheme: dark;
@@ -307,3 +316,13 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--hot); outli
 .seg.where { height: 46px; }
 .where-note { margin: -6px 0 0; font-size: 13px; color: var(--muted); }
 .swap { display: inline-block; font-size: 10.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; background: var(--hot); color: var(--navy); padding: 2px 7px; border-radius: 5px; margin-bottom: 5px; }
+
+/* record donut */
+.stat.record { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
+.donut { width: 72px; height: 72px; display: block; }
+.donut .d-n { font-family: var(--display); font-weight: 800; font-size: 20px; fill: var(--ink); }
+.donut .d-t { font: 700 6px var(--body); letter-spacing: .08em; text-transform: uppercase; fill: var(--muted); }
+.rec-key { font-size: 11.5px; font-weight: 700; color: var(--ink); display: flex; align-items: center; gap: 2px 7px; flex-wrap: wrap; }
+.rec-key span { display: inline-flex; align-items: center; gap: 3px; white-space: nowrap; }
+.rec-key i { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
+.k-w { background: var(--win); } .k-d { background: var(--draw); } .k-l { background: var(--loss); }

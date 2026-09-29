@@ -618,7 +618,8 @@ function renderGamesFor(games: Game[], filterBar: string) {
     <div class="title"><h1>Games</h1><p>Match days, minutes and points.</p></div>
     ${filterBar}
     <div class="stats">
-      <div class="stat"><span>Record</span><b class="num">${w}-${d}-${l}</b><em>W · D · L</em></div>
+      <div class="stat record"><span>Record</span>${donut(w, d, l)}
+        <div class="rec-key num"><span><i class="k-w"></i>${w}W</span><span><i class="k-d"></i>${d}D</span><span><i class="k-l"></i>${l}L</span></div></div>
       <div class="stat"><span>Your points</span><b class="num">${pts}</b><em>${tries} ${tries === 1 ? "try" : "tries"}</em></div>
       <div class="stat"><span>Minutes</span><b class="num">${mins}</b><em>${withMins.length ? Math.round(mins / withMins.length) + " avg" : "per game"}</em></div>
     </div>
@@ -626,6 +627,23 @@ function renderGamesFor(games: Game[], filterBar: string) {
     ${charts}
     <h2 class="sec">${teamFilter === "all" ? "Season" : teamLabel(teamFilter)}${played ? ` · ${played} played` : ""}</h2>
     <section class="card">${list || `<div class="empty">No games yet. Log your first one after Saturday.</div>`}</section>`;
+}
+
+// Win, draw, loss ring. Segments are separated by a small gap; the centre shows games played.
+function donut(w: number, d: number, l: number): string {
+  const total = w + d + l, R = 26, C = 2 * Math.PI * R, gap = total > 1 ? 3 : 0;
+  const parts = [{ n: w, c: "var(--win)", t: "won" }, { n: d, c: "var(--draw)", t: "drawn" }, { n: l, c: "var(--loss)", t: "lost" }].filter(p => p.n > 0);
+  let off = 0;
+  const arcs = parts.map(p => {
+    const len = (p.n / total) * C, seg = Math.max(len - gap, 0.5);
+    const el = `<circle cx="36" cy="36" r="${R}" fill="none" stroke="${p.c}" stroke-width="10" stroke-dasharray="${seg} ${C - seg}" stroke-dashoffset="${-off}" transform="rotate(-90 36 36)"/>`;
+    off += len; return el;
+  }).join("");
+  const label = total ? `${w} won, ${d} drawn, ${l} lost` : "No games yet";
+  return `<svg class="donut" viewBox="0 0 72 72" role="img" aria-label="${label}">
+    <circle cx="36" cy="36" r="${R}" fill="none" stroke="var(--sunk)" stroke-width="10"/>${arcs}
+    <text x="36" y="38" text-anchor="middle" class="d-n">${total}</text>
+    <text x="36" y="48" text-anchor="middle" class="d-t">played</text></svg>`;
 }
 
 function gameFormHTML(g: Game): string {
